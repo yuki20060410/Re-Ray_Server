@@ -1,0 +1,16 @@
+# データ・ログ(フォルダだけ残す)
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# 接続情報(実際の値は git に入れない)
+.env
+*.local
+
+# 言語ごとの生成物(言語が決まったら整理する)
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+vendor/
