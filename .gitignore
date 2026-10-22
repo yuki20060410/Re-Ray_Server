@@ -8,12 +8,12 @@ logs/*
 .env
 *.local
 
-# 言語ごとの生成物(言語が決まったら整理する)
-node_modules/
-__pycache__/
-*.pyc
-.venv/
-vendor/
+# 作業のまとめ(手元だけに置き、git には上げない)
+まとめ/
 
-# TypeScript のビルド結果
+# Claude Code の個人設定(各自の PC だけで使う)
+.claude/settings.local.json
+
+# Node.js / TypeScript の生成物
+node_modules/
 dist/
