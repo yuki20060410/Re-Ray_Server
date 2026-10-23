@@ -1,6 +1,6 @@
 # DATA_MODEL — データモデルと集計規則
 
-> 更新: 2026-10-22 / 状態: **ドラフト**(10/20 の決定で positions / instruction_codes / transcripts を【案】で追加)
+> 更新: 2026-10-23 / 状態: **ドラフト**(10/20 の決定で positions / instruction_codes / transcripts を【案】で追加)
 > チームのテーブル案(`サーバーサイド/02_テーブル定義`:devices / messages / signals / acks の4表)を**正**とし、仕様修正案(10/16)の変更と、サーバー側だけの追加を重ねる。表記は `../README.md` §3。
 > DB は **MySQL に決定**(2026-10-22)。型は MySQL の書き方(MySQL 8.0 以上、InnoDB、文字コード `utf8mb4`)。
 
@@ -52,7 +52,7 @@ erDiagram
 |---|---|---|
 | `id` | VARCHAR(16) PK | 端末ID。`dev-001` |
 | `owner` | VARCHAR(64) | 持ち主の名前 |
-| `online` | TINYINT(1) | つながっているか。**更新するのはサーバーだけ**(`ARCHITECTURE_2026-10-22.md` §5)【修正案】 |
+| `online` | TINYINT(1) | つながっているか。**更新するのはサーバーだけ**(`ARCHITECTURE_2026-10-23.md` §5)【修正案】 |
 | `via` | VARCHAR(8) | 最後に届いた経路。`wifi` / `lora` |
 | `battery` | TINYINT UNSIGNED(空可) | 電池の残り(%) |
 | `glass` | TINYINT(1) | グラスとつながっているか |
@@ -86,12 +86,13 @@ erDiagram
 | `seq` | SMALLINT UNSIGNED | 端末の連番 |
 | `code` | TINYINT UNSIGNED | 定型信号のコード(1〜31。1=SOS。一覧は共通仕様 01) |
 | `pos` | TINYINT UNSIGNED | 【案】ポジション番号。無ければ 0(場所なし) |
+| `n` | TINYINT UNSIGNED(空可) | 【案】数量。5 人きざみの区分の上限(5〜100)。数を使わない信号では空(`SIGNAL_FORMAT_2026-10-23.md`) |
 | `via` | VARCHAR(8) | 届いた経路。`wifi` / `lora` |
 | `device_ts` | DATETIME(3)(空可) | 端末が付けた時刻。参考 |
 | `received_at` | DATETIME(3) | サーバーが受け取った時刻。**こちらを正にする** |
 
 - 【修正案】`(device_id, seq)` に**一意制約は付けない**(seq は 65535 の次に 0 に戻り、同じ組が正当に再び出るため)。代わりに `(device_id, seq, received_at)` に索引を付ける。
-- 重複の判定は DB の制約ではなく**サーバーのコード**で行う:直近10分に同じ `device_id` と `seq` があれば捨てる【案】(`ARCHITECTURE_2026-10-22.md` §6)。
+- 重複の判定は DB の制約ではなく**サーバーのコード**で行う:直近10分に同じ `device_id` と `seq` があれば捨てる【案】(`ARCHITECTURE_2026-10-23.md` §6)。
 
 ### 3.4 acks(届いた確認)
 
@@ -145,7 +146,7 @@ erDiagram
 
 ### 4.1 message_targets(送った時の宛先)【追加案】
 
-「6台中4台に届いた」の分母を、**送った時点の状態で残す**ための表(`INTERFACES_2026-10-22.md` §4.1)。
+「6台中4台に届いた」の分母を、**送った時点の状態で残す**ための表(`INTERFACES_2026-10-23.md` §4.1)。
 
 | 列 | 型 | 中身 |
 |---|---|---|
@@ -203,4 +204,4 @@ erDiagram
 ## 7. 保持と容量
 
 - ログをいつまで残すかは未決(チーム)。検証の期間中は削除しない。
-- DB は MySQL のサーバーに置く(置き場所は未決。検証版は手元の PC か Docker)。接続情報は `.env` に書き、git に入れない。実測のデータは CSV に出して `logs/` に、日付と条件が分かるファイル名で保存する(例 `logs/2026-10-20_m5_text-10x.csv`)。
+- DB は MySQL。検証版は Docker の MySQL 8.4(`compose.yaml`)、本番の置き場所は未決。データは Docker のボリューム `mysql-data` に残る。接続情報は `.env` に書き、git に入れない。実測のデータは CSV に出して `logs/` に、日付と条件が分かるファイル名で保存する(例 `logs/2026-10-20_m5_text-10x.csv`)。
