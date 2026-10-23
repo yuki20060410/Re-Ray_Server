@@ -1,0 +1,60 @@
+# 開発・検証用の Docker 構成(本番に移るまで使う)
+#   ブローカーと DB だけ起動:  docker compose up -d
+#   アプリも Docker で起動:   docker compose --profile app up -d --build
+# 接続情報は .env から読む(.env.example をコピーして作る)
+
+services:
+  # MQTT ブローカー
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    ports:
+      - "1883:1883"   # 端末・サーバー・疑似端末ツール用
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data   # 永続化(QoS1 の取りこぼし防止)
+    restart: unless-stopped
+
+  # DB
+  mysql:
+    image: mysql:8.4
+    ports:
+      - "${DB_PORT:-3307}:3306"   # PC に MySQL が入っていてもぶつからないよう 3307
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-reray}
+      MYSQL_USER: ${DB_USER:-reray}
+      MYSQL_PASSWORD: ${DB_PASS:?.env に DB_PASS を書いてください}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:?.env に DB_ROOT_PASS を書いてください}
+    # 文字コードは utf8mb4、時間帯は UTC に固定(DATA_MODEL §1)
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro   # 初回起動時に .sql を流す(表の定義を置く予定)
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # サーバーアプリ(本番に近い形で確かめたいときだけ。ふだんは手元で npm run dev)
+  server:
+    profiles: ["app"]
+    build: .
+    env_file: .env
+    environment:
+      # コンテナの中からは、サービス名でつなぐ(.env の localhost を上書き)
+      MQTT_URL: mqtt://mosquitto:1883
+      DB_HOST: mysql
+      DB_PORT: "3306"
+    depends_on:
+      mosquitto:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mosquitto-data:
+  mysql-data:

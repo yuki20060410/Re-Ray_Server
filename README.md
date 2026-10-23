@@ -20,7 +20,7 @@
 | 2 | 画面に状態と記録を渡す | DB → **サーバー → 管理PCの画面** |
 | 3 | 画面から頼まれた文字・指示を送る | 管理PCの画面・文字起こしアプリ → **サーバー** → MQTT → 端末 |
 
-10/20 の決定で、サーバーは**ポジション表・指示コード表**も持ち、**文字起こしの文**も配る(`docs/INTERFACES_2026-10-22.md` §4.3)。
+10/20 の決定で、サーバーは**ポジション表・指示コード表**も持ち、**文字起こしの文**も配る(`docs/INTERFACES_2026-10-23.md` §4.3)。
 
 ### 検証で確かめること
 
@@ -58,7 +58,7 @@ flowchart LR
 
 | 要素 | 内容 |
 |---|---|
-| ブローカー | Mosquitto(`config/mosquitto.conf`)。置き場所は未決 |
+| ブローカー | Mosquitto(`config/mosquitto.conf`)。本番に移るまでは Docker、本番の置き場所は未決 |
 | サーバーアプリ | MQTT の購読・検証・重複排除・保存、端末の状態の判定、文字の送信と ack の集計、HTTP API |
 | DB | チーム案の4表(devices / messages / signals / acks)+ positions / instruction_codes / transcripts【案】+ 原本 events【追加案】。**MySQL** |
 | 管理PCの画面 | 別パート。サーバーの API を使う |
@@ -73,9 +73,9 @@ flowchart LR
 | 優先 | 情報 | 扱い |
 |---|---|---|
 | **1** | 10/20 の決定(`00_進め方と目標` / `01_要件定義` / `02_機能一覧`) | **今の正**。共通仕様より新しい |
-| **2** | チーム共有の仕様 md(2026-10-13 のたたき台) | 10/20 の決定と食い違うところは、共通仕様が直るまで【案】で書く(`docs/INTERFACES_2026-10-22.md` §8) |
-| **3** | 仕様修正案(2026-10-16、5点) | #3・#4 は採用、#2 は反映待ち、#1 は一部置きかえ(`docs/ARCHITECTURE_2026-10-22.md` §11) |
-| **4** | `tkitora/re-ray`(ハード試作) | 参考。違う点は `docs/INTERFACES_2026-10-22.md` §7 に記録 |
+| **2** | チーム共有の仕様 md(2026-10-13 のたたき台) | 10/20 の決定と食い違うところは、共通仕様が直るまで【案】で書く(`docs/INTERFACES_2026-10-23.md` §8) |
+| **3** | 仕様修正案(2026-10-16、5点) | #3・#4 は採用、#2 は反映待ち、#1 は一部置きかえ(`docs/ARCHITECTURE_2026-10-23.md` §11) |
+| **4** | `tkitora/re-ray`(ハード試作) | 参考。違う点は `docs/INTERFACES_2026-10-23.md` §7 に記録 |
 
 ### 3.2 表記
 
@@ -93,14 +93,15 @@ flowchart LR
 
 | 知りたいこと | 読むところ |
 |---|---|
-| 全体の作りと考え方 | `docs/ARCHITECTURE_2026-10-22.md` |
-| 文字起こしの災害用・普段用と作る順番 | `docs/ARCHITECTURE_2026-10-22.md` §12 |
-| MQTT の JSON、API の形 | `docs/INTERFACES_2026-10-22.md` |
-| DB のテーブル | `docs/DATA_MODEL_2026-10-22.md` |
-| MQTT・DB で必ず渡す項目(早見表) | `docs/FIELDS_2026-10-22.md` |
-| 受け取ったものを DB・送り先に何を渡すか(例つき) | `docs/DATAFLOW_2026-10-22.md` |
+| 全体の作りと考え方 | `docs/ARCHITECTURE_2026-10-23.md` |
+| 文字起こしの災害用・普段用と作る順番 | `docs/ARCHITECTURE_2026-10-23.md` §12 |
+| MQTT の JSON、API の形 | `docs/INTERFACES_2026-10-23.md` |
+| DB のテーブル | `docs/DATA_MODEL_2026-10-23.md` |
+| MQTT・DB で必ず渡す項目(早見表) | `docs/FIELDS_2026-10-23.md` |
+| 受け取ったものを DB・送り先に何を渡すか(例つき) | `docs/DATAFLOW_2026-10-23.md` |
+| 定型信号・救援コードの形、数量 `n`、コード一覧の表の書き方 | `docs/SIGNAL_FORMAT_2026-10-23.md` |
 | 何をどう確かめるか | `docs/TEST_PLAN_2026-10-22.md` |
-| ハード試作との食い違い | `docs/INTERFACES_2026-10-22.md` §7 |
+| ハード試作との食い違い | `docs/INTERFACES_2026-10-23.md` §7 |
 
 ---
 
@@ -130,42 +131,67 @@ flowchart LR
 
 ## 6. 使い方
 
-サーバーアプリは **TypeScript(Node.js 24 以上)**。
+サーバーアプリは **TypeScript(Node.js 24 以上)**。本番に移るまでは、**MQTT ブローカー(Mosquitto)と DB(MySQL)を Docker で**動かす。サーバーアプリはふだん手元で動かす(保存するとすぐ再起動できるため)。
+
+| 動かすもの | 場所 | ポート |
+|---|---|---|
+| Mosquitto 2.0 | Docker | 1883 |
+| MySQL 8.4 | Docker | **3307**(PC に別の MySQL が入っていても 3306 とぶつからないように) |
+| サーバーアプリ | 手元(`npm run dev`)。本番に近い形で試すときだけ Docker | — |
 
 ### 6.1 はじめての人へ:手元に環境を作る
 
 1. **Node.js 24 を入れる**
    - https://nodejs.org/ から「24」の LTS 版を入れる。nvm(nvm-windows)を使っている人は、このフォルダで `nvm install 24` → `nvm use 24`(`.nvmrc` に 24 と書いてある)
    - 入ったか確かめる:`node -v` が `v24.` で始まればよい
-2. **リポジトリを手元に持ってくる**
+2. **Docker Desktop を入れて起動する**
+   - https://www.docker.com/products/docker-desktop/ から入れる。タスクバーのクジラのアイコンが動いていれば起動している
+   - 入ったか確かめる:`docker compose version` で版が出ればよい
+3. **リポジトリを手元に持ってくる**
    ```powershell
    git clone https://github.com/yuki20060410/Re-Ray_Server.git
    cd Re-Ray_Server
    ```
-3. **依存パッケージを入れる**
+4. **依存パッケージを入れる**
    ```powershell
    npm ci
    ```
    - `npm ci` は `package-lock.json` のとおりに入れるので、**全員が同じバージョン**になる。`npm install` だとバージョンがずれることがある
    - Node が 24 より古いと、ここでエラーになる(`.npmrc` の `engine-strict`)。手順 1 に戻る
-4. **接続情報のファイルを作る**
+5. **接続情報のファイルを作る**
    ```powershell
    Copy-Item .env.example .env
    ```
-   - `.env` に自分の値を入れる(M1 で MQTT と MySQL を使い始めたら必要)。`.env` は git に入らない。**パスワードを `.env.example` に書かない**
-5. **動くか確かめる**
+   - `.env` を開き、`DB_PASS` と `DB_ROOT_PASS` に**自分で決めたパスワード**を入れる(空のままだと次の手順で止まる)。`.env` は git に入らない。**パスワードを `.env.example` に書かない**
+6. **Docker で Mosquitto と MySQL を起動する**
+   ```powershell
+   npm run docker:up
+   docker compose ps     # mosquitto と mysql が Up、mysql が (healthy) になれば OK
+   ```
+   - はじめての起動では、イメージのダウンロードに数分かかる
+7. **動くか確かめる**
    ```powershell
    npm run typecheck   # 何も出なければ OK
    npm run dev         # 「Re-Ray_Server: 起動しました」と出れば OK(Ctrl+C で止める)
    ```
+
+**DB を空に戻したいとき**:`docker compose down -v`(**DB のデータが全部消える**)→ `npm run docker:up`。`db/init/` の表の定義が流れ直す。
 
 **パッケージを足すとき**:`npm install パッケージ名` で入れ、変わった `package.json` と `package-lock.json` を**両方**コミットする。ほかの人は pull したあと `npm ci` をやり直す。
 
 ### 6.2 ふだんのコマンド
 
 ```powershell
-# ブローカーを起動(ローカル LAN のみ。M1 以降)
-mosquitto -c config/mosquitto.conf -v
+# Mosquitto と MySQL を起動 / 止める / ログを見る
+npm run docker:up
+npm run docker:down
+npm run docker:logs
+
+# MySQL に入って中を見る(パスワードは .env の DB_PASS)
+docker compose exec mysql mysql -ureray -p reray
+
+# サーバーアプリも Docker で動かす(本番に近い形で試すとき)
+npm run docker:app
 
 # サーバーアプリを開発モードで起動(保存すると自動で再起動)
 npm run dev
@@ -186,15 +212,21 @@ npm run typecheck
 Re-Ray_Server/
 ├── README.md
 ├── docs/
-│   ├── ARCHITECTURE_2026-10-22.md  設計書(構成、データの流れ、online の判定、技術選定)
-│   ├── INTERFACES_2026-10-22.md    MQTT の JSON、HTTP API、ハード試作との差
-│   ├── DATA_MODEL_2026-10-22.md    テーブル、集計規則
-│   ├── FIELDS_2026-10-22.md        MQTT・DB で渡す項目の早見表
-│   ├── DATAFLOW_2026-10-22.md      受信1件ごとに DB と送り先へ渡すもの(例つき)
+│   ├── ARCHITECTURE_2026-10-23.md  設計書(構成、データの流れ、online の判定、技術選定)
+│   ├── INTERFACES_2026-10-23.md    MQTT の JSON、HTTP API、ハード試作との差
+│   ├── DATA_MODEL_2026-10-23.md    テーブル、集計規則
+│   ├── FIELDS_2026-10-23.md        MQTT・DB で渡す項目の早見表
+│   ├── DATAFLOW_2026-10-23.md      受信1件ごとに DB と送り先へ渡すもの(例つき)
+│   ├── SIGNAL_FORMAT_2026-10-23.md 定型信号・救援コードの形と数量 n、一覧の書き方
 │   └── TEST_PLAN_2026-10-22.md     M1〜M5 の手順と合格基準(案)
-│                                   (ファイル名の日付 = 最後に中身を変えた日)
+│                                   (ファイル名の日付 = 最後に中身を変えた日。リンクの直しだけなら変えない)
+├── compose.yaml           Docker の構成(Mosquitto・MySQL・サーバーアプリ)
+├── Dockerfile             サーバーアプリのイメージ(本番に近い形で試す用)
+├── .dockerignore          イメージに入れないもの
 ├── config/
-│   └── mosquitto.conf     検証用のブローカー設定
+│   └── mosquitto.conf     検証用のブローカー設定(Docker の Mosquitto が読む)
+├── db/
+│   └── init/              MySQL のはじめての起動時に流す .sql(表の定義を置く予定)
 ├── package.json           npm のスクリプトと依存パッケージ
 ├── package-lock.json      依存パッケージの正確なバージョン(全員そろえるため、必ずコミット)
 ├── tsconfig.json          TypeScript の設定
@@ -204,7 +236,7 @@ Re-Ray_Server/
 ├── src/                   サーバーアプリ(TypeScript。入口は src/index.ts)
 ├── dist/                  ビルド結果(git 管理外)
 ├── tools/                 疑似端末ツール、ログの解析スクリプト(TypeScript)
-├── data/                  作業用のデータ(git 管理外。DB 本体は MySQL のサーバー側)
+├── data/                  作業用のデータ(git 管理外。DB 本体は Docker のボリューム)
 └── logs/                  サーバーのログ、実測ログ(git 管理外)
 ```
 
@@ -218,10 +250,10 @@ Re-Ray_Server/
 
 | # | 内容 | 状態 |
 |---|---|---|
-| 1 | 言語・フレームワーク、DB の種類 | 言語は **TypeScript**、DB は **MySQL** に決定(10/22)。フレームワークは M0 で決める(`ARCHITECTURE_2026-10-22.md` §10) |
-| 2 | サーバーの置き場所(回線断でも届くよう、本番はネット上) | 検証版は手元の PC |
-| 3 | ブローカーの置き場所・製品・認証 | 未決(共通仕様 03) |
-| 4 | 新着の知らせ方(画面が取りに来る / サーバーから押し出す) | 未決。両方に対応できる形(`INTERFACES_2026-10-22.md` §5) |
+| 1 | 言語・フレームワーク、DB の種類 | 言語は **TypeScript**、DB は **MySQL** に決定(10/22)。フレームワークは M0 で決める(`ARCHITECTURE_2026-10-23.md` §10) |
+| 2 | サーバーの置き場所(回線断でも届くよう、本番はネット上) | 検証版は手元の PC + Docker(10/23)。本番は未決 |
+| 3 | ブローカーの置き場所・製品・認証 | 検証版は Docker の Mosquitto 2.0(認証なし)。本番は未決(共通仕様 03) |
+| 4 | 新着の知らせ方(画面が取りに来る / サーバーから押し出す) | 未決。両方に対応できる形(`INTERFACES_2026-10-23.md` §5) |
 | 5 | web は MQTT 直結か、API 経由か | 未決。API 経由で書いた |
 | 6 | ログインと、API を守る方法 | 未決。検証版は認証なし |
 | 7 | ログの保存期間、`users` 表を作るか | 未決 |
@@ -229,7 +261,7 @@ Re-Ray_Server/
 | 9 | ack をどこまで出すか | 【修正案】v1 は「端末に届いた」まで |
 | 10 | 定型信号・指示コード・ポジション番号の一覧 | 段階0(10月末まで)に共通仕様 01 へ |
 | 11 | 文字起こしアプリの入口(MQTT か API か) | 未決(共通仕様 03)。災害用(アプリで文字にする)は API の案で書いた |
-| 12 | 文字起こしを作る順番 | **決定**(10/22):災害用(アプリで文字にして送る)が先。普段用(音声をサーバーで文字にする)は【将来】(`docs/ARCHITECTURE_2026-10-22.md` §12) |
+| 12 | 文字起こしを作る順番 | **決定**(10/22):災害用(アプリで文字にして送る)が先。普段用(音声をサーバーで文字にする)は【将来】(`docs/ARCHITECTURE_2026-10-23.md` §12) |
 
 ### 8.2 共通仕様への反映待ち
 
@@ -237,10 +269,10 @@ Re-Ray_Server/
 
 - text の `mid` と、ack の `ack_mid`(修正案 #2)
 - LoRa の心拍(status の形)
-- 10/20 の決定で増えた項目:`pos`、指示コードの下り、本部に届いた、文字起こし、GPS(一覧は `docs/INTERFACES_2026-10-22.md` §8)
+- 10/20 の決定で増えた項目:`pos`、指示コードの下り、本部に届いた、文字起こし、GPS(一覧は `docs/INTERFACES_2026-10-23.md` §8)
 
 > [!WARNING]
-> **共通仕様に入るまでは【案】として作り、名前は1か所(定数・型)にまとめておく。** ack の暫定の動きは `docs/INTERFACES_2026-10-22.md` §2.4。
+> **共通仕様に入るまでは【案】として作り、名前は1か所(定数・型)にまとめておく。** ack の暫定の動きは `docs/INTERFACES_2026-10-23.md` §2.4。
 
 ---
 
@@ -259,5 +291,8 @@ Re-Ray_Server/
 | 2026-10-16 | 読みやすさを改善(要点・読み方の案内、構成図を mermaid に、表の整理)。内容は変更なし |
 | 2026-10-22 | 言語を TypeScript に決定。TypeScript の環境を作り、「使い方」とフォルダ構成を具体化 |
 | 2026-10-22 | DB を MySQL に決定。表の型を MySQL の書き方に変更 |
+| 2026-10-23 | MQTT.js(`mqtt` 5.16 系)を入れた。ARCHITECTURE §10 に決定として記録 |
+| 2026-10-23 | `SIGNAL_FORMAT` を追加。定型信号の数量 `n`(5 人きざみ、最大 100)を【案】で各文書に反映 |
+| 2026-10-23 | 本番に移るまで Mosquitto と MySQL を Docker で動かすことにした(`compose.yaml`)。使い方を §6 に追記 |
 | 2026-10-22 | 文字起こしは災害用(アプリで文字にする)を先に作ると決定。普段用(音声を MQTT で受けてサーバーで文字にする)の構成案を【将来】として記録 |
 | 2026-10-22 | 10/20 の決定(進め方・要件定義・機能一覧)を反映。ポジション・指示コード・文字起こし・本部に届いた・GPS を【案】で追加。修正案 #3・#4 を採用扱いに |

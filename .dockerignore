@@ -1,0 +1,9 @@
+# イメージに入れないもの(大きいもの・秘密・文書)
+node_modules
+dist
+.env
+.git
+docs
+まとめ
+data
+logs
