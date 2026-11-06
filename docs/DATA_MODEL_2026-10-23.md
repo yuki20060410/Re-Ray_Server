@@ -1,6 +1,7 @@
 # DATA_MODEL — データモデルと集計規則
 
-> 更新: 2026-10-23 / 状態: **ドラフト**(10/20 の決定で positions / instruction_codes / transcripts を【案】で追加)
+> 更新: 2026-10-23 / 状態: **ドラフト**(10/20 の決定で positions / instruction_codes / transcripts を【案】で追加。2026-11-06 に signals へ `dir` を追加)
+> DB の担当(すみださん)の `2026-10-23_テーブル定義_案.md` とは、土台(端末IDの型・時刻の時間帯・ENUM)が違う。比べた結果と DB 修正依頼の案は `DB案の比較_2026-11-06.md`。決まるまで、この文書は直さずに置く。
 > チームのテーブル案(`サーバーサイド/02_テーブル定義`:devices / messages / signals / acks の4表)を**正**とし、仕様修正案(10/16)の変更と、サーバー側だけの追加を重ねる。表記は `../README.md` §3。
 > DB は **MySQL に決定**(2026-10-22)。型は MySQL の書き方(MySQL 8.0 以上、InnoDB、文字コード `utf8mb4`)。
 
@@ -24,7 +25,7 @@
 - 時刻は `DATETIME(3)`(ミリ秒まで)に **UTC** で保存し、API で日本時間(+09:00)の ISO 8601 にして返す。DB への接続で時間帯を `+00:00` に固定する(PC の時間帯に左右されないように)。
 - 真偽は `TINYINT(1)`(0 / 1)。`via`・`kind` などの決まった値は `VARCHAR` で持ち、値の確かめはサーバーのコードで行う(`ENUM` は値を足すたびに表を変える必要があるため使わない)。
 - 文字コードは `utf8mb4`(日本語と絵文字を入れても壊れないように)。
-- 端末ID は JSON と同じ `dev-NNN` の文字列。LoRa の u16 との変換は端末側の話で、サーバーは文字列だけを扱う。
+- 端末ID は JSON と同じ `dev-NNN` の文字列。LoRa の u16 は、出口から生のまま届いた分をサーバーが分解するときに `dev-NNN` に直す(`GATEWAY_RAW_FORMAT_2026-10-23.md` §2)。DB には文字列だけが入る。
 - 検証用なので、索引は最小限。端末数十台 × 数時間の規模を想定する。
 
 ## 2. 表どうしの関係
@@ -87,9 +88,10 @@ erDiagram
 | `code` | TINYINT UNSIGNED | 定型信号のコード(1〜31。1=SOS。一覧は共通仕様 01) |
 | `pos` | TINYINT UNSIGNED | 【案】ポジション番号。無ければ 0(場所なし) |
 | `n` | TINYINT UNSIGNED(空可) | 【案】数量。5 人きざみの区分の上限(5〜100)。数を使わない信号では空(`SIGNAL_FORMAT_2026-10-23.md`) |
+| `dir` | TINYINT UNSIGNED(空可) | 【案】向かう方角。8 方位の 1〜8(1 = 北、時計回り)。方角を使わない信号では空(`SIGNAL_FORMAT_2026-10-23.md` §2) |
 | `via` | VARCHAR(8) | 届いた経路。`wifi` / `lora` |
 | `device_ts` | DATETIME(3)(空可) | 端末が付けた時刻。参考 |
-| `received_at` | DATETIME(3) | サーバーが受け取った時刻。**こちらを正にする** |
+| `received_at` | DATETIME(3) | サーバーが受け取った時刻。**こちらを正にする**。LoRa 由来(`up/gw/{出口ID}/lora`)は「受信時刻 − `age_ms`」をサーバーが渡す(`GATEWAY_RAW_FORMAT_2026-10-23.md` §1) |
 
 - 【修正案】`(device_id, seq)` に**一意制約は付けない**(seq は 65535 の次に 0 に戻り、同じ組が正当に再び出るため)。代わりに `(device_id, seq, received_at)` に索引を付ける。
 - 重複の判定は DB の制約ではなく**サーバーのコード**で行う:直近10分に同じ `device_id` と `seq` があれば捨てる【案】(`ARCHITECTURE_2026-10-23.md` §6)。
@@ -168,8 +170,8 @@ erDiagram
 | `received_at` | DATETIME(3) | 受信・送信した時刻 |
 | `direction` | VARCHAR(8) | `up`(受信)/ `down`(送信) |
 | `topic` | VARCHAR(255) | MQTT トピック |
-| `payload` | TEXT | 本文(そのまま。大きすぎれば切り詰め) |
-| `result` | VARCHAR(16) | `accepted` / `duplicate`(重複で捨てた)/ `invalid`(不正)/ `unmatched`(対応づけられない ack)/ `sent` / `failed` |
+| `payload` | TEXT | 本文(そのまま。大きすぎれば切り詰め)。`up/gw/{出口ID}/lora` のバイナリは 16 進の文字列にして入れる |
+| `result` | VARCHAR(16) | `accepted` / `duplicate`(重複で捨てた)/ `invalid`(不正)/ `unmatched`(対応づけられない ack)/ `ignored`(LoRa の中だけの ACK・BEACON)/ `sent` / `failed` |
 | `note` | VARCHAR(255) | 理由(例 `v!=1`、`src mismatch`) |
 
 チームの4表だけで足りるなら、この表を作らなくてもよい。作らない場合も、`/api/logs` の元は signals・acks・messages になる。
