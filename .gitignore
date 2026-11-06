@@ -10,7 +10,7 @@ logs/*
 
 # 作業のまとめ(手元だけに置き、git には上げない)
 まとめ/
-
+案/
 # Claude Code の個人設定(各自の PC だけで使う)
 .claude/settings.local.json
 
