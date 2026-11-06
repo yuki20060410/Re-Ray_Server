@@ -209,8 +209,16 @@ npm run typecheck
 # テスト(src の *.test.ts を全部流す。Docker は要らない)
 npm test
 
-# 疑似端末ツールの実行方法は、tools/ を作ったあとにここへ書く
+# 疑似端末ツール(実機なしで端末の代わりに流す。使い方の全部は tools/fake-device.ts の先頭)
+npm run fake -- signal --id dev-001 --code 6 --pos 3 --n 20   # 定型信号を送り、「本部に届いた」を待つ
+npm run fake -- signal --id dev-001 --seq 42 --repeat 2       # 同じ seq を 2 回(重複の確かめ)
+npm run fake -- status --id dev-001 --battery 80 --glass true
+npm run fake -- will   --id dev-001                           # 遺言を登録して、黙って切れる
+npm run fake -- raw    --topic reray/v1/up/dev-009/signal --payload "{"   # 壊れた JSON
+npm run fake -- listen --id dev-001                           # 下りを表示し続ける
 ```
+
+**M1 を手で確かめる**:`docker compose up -d mosquitto`(MySQL はまだ要らない)→ `npm run dev` → 別のターミナルで `npm run fake -- signal`。サーバーの画面に `reray/v1/up/dev-001/signal → accepted` と出て、疑似端末に「本部に届いた: 1 件すべて」と出れば OK。保存は今はメモリ版なので、サーバーを止めると中身は消える。
 
 ## 7. フォルダ構成
 
@@ -242,9 +250,12 @@ Re-Ray_Server/
 ├── .npmrc                 Node のバージョンが違うと npm install を止める設定
 ├── .env.example           接続情報のひな形(コピーして .env を作る)
 ├── src/                   サーバーアプリ(TypeScript。入口は src/index.ts)
+│   ├── protocol/          トピックと端末ID(topics.ts)、上りの JSON の検証(validate.ts)
+│   ├── server/            受信 1 件ごとの処理(receiver.ts)、pc の連番(pcSeq.ts)
+│   ├── mqtt/              ブローカーへの接続と購読(保存が終わってから受け取りの返事を返す)
 │   └── storage/           保存の窓口(types.ts)と、その実装(今はメモリ版だけ)。約束のテストは contract.ts
 ├── dist/                  ビルド結果(git 管理外)
-├── tools/                 疑似端末ツール、ログの解析スクリプト(TypeScript)
+├── tools/                 疑似端末ツール(fake-device.ts。npm run fake)、ログの解析スクリプト(TypeScript)
 ├── data/                  作業用のデータ(git 管理外。DB 本体は Docker のボリューム)
 └── logs/                  サーバーのログ、実測ログ(git 管理外)
 ```
@@ -307,5 +318,6 @@ Re-Ray_Server/
 | 2026-10-23 | 本番に移るまで Mosquitto と MySQL を Docker で動かすことにした(`compose.yaml`)。使い方を §6 に追記 |
 | 2026-10-22 | 文字起こしは災害用(アプリで文字にする)を先に作ると決定。普段用(音声を MQTT で受けてサーバーで文字にする)の構成案を【将来】として記録 |
 | 2026-10-22 | 10/20 の決定(進め方・要件定義・機能一覧)を反映。ポジション・指示コード・文字起こし・本部に届いた・GPS を【案】で追加。修正案 #3・#4 を採用扱いに |
+| 2026-11-06 | M1(上りの最小経路):MQTT の購読、上りの検証、重複の判定と保存、「本部に届いた」の返信、疑似端末ツール(`npm run fake`)。保存はメモリ版。TEST_PLAN M1 に結果を記録 |
 | 2026-11-06 | HTTP フレームワークを Fastify、テストを `node:test` に決定。保存の窓口(`src/storage/`)とメモリ版、約束のテストを追加(`npm test`) |
 | 2026-11-06 | `GATEWAY_RAW_FORMAT` と `DB案の比較` を追加。`SIGNAL_FORMAT` をプロジェクトの版(方角 `dir`、定型信号の一覧)に合わせ、`dir`・出口の生渡し・統合案で決まった LoRa の下りを各文書に反映 |
