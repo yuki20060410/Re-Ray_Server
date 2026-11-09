@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>端末の詳細 | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <p><a href="index.html">← 端末一覧へ</a></p>
+    <h1 id="title">端末の詳細</h1>
+
+    <div class="grid-2">
+      <section class="card">
+        <h2>いまの状態</h2>
+        <div id="sos"></div>
+        <dl class="status-list" id="status"></dl>
+      </section>
+      <section class="card">
+        <h2>この人に送る</h2>
+        <div id="send"></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>この端末とのやり取り</h2>
+      <div class="table-wrap">
+        <table>
+          <thead id="log-head"></thead>
+          <tbody id="logs"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('');
+    const id = Number(param('id'));
+    $('#log-head').innerHTML = LOG_HEAD;
+
+    async function refresh() {
+      const [d, logs] = await Promise.all([Api.getDevice(id), Api.getLogs({ device_id: id })]);
+      $('#title').textContent = `${ownerOf(d)}（${deviceLabel(d.id)}）`;
+      $('#sos').innerHTML = d.open_sos.map(s => `
+        <div class="sos-box">
+          <strong>SOS</strong> ${fmtTime(s.received_at)}（${fmtAgo(s.received_at)}）
+          ${s.position ? esc(s.position.name) : ''}
+          <button class="btn small danger" data-handle="${s.id}">対応済みにする</button>
+        </div>`).join('');
+      $('#status').innerHTML = `
+        <dt>つながり</dt><dd><span class="dot ${d.is_online ? 'on' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}</dd>
+        <dt>経路</dt><dd>${d.via ? `<span class="tag ${d.via}">${viaLabel(d.via)}</span>` : '—'}</dd>
+        <dt>ポジション</dt><dd>${esc(d.position ? `${d.position.id}: ${d.position.name}` : '—')}</dd>
+        <dt>電池</dt><dd>${batteryHtml(d.battery)}</dd>
+        <dt>グラス</dt><dd>${d.has_glass ? 'つながっている' : 'なし'}</dd>
+        <dt>最後の連絡</dt><dd>${d.last_signal ? `${esc(signalLabel(d.last_signal))}（${fmtTime(d.last_signal.received_at)}）` : 'まだない'}</dd>
+        <dt>最後に見えた</dt><dd>${d.last_seen_at ? `${fmtTime(d.last_seen_at)}（${fmtAgo(d.last_seen_at)}）` : '—'}</dd>`;
+      $('#logs').innerHTML = logs.length ? logs.map(logRowHtml).join('')
+        : '<tr><td colspan="6" class="empty">まだやり取りがありません</td></tr>';
+    }
+
+    // 「対応済みにする」ボタン（状態の欄と記録の欄の両方）
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('main [data-handle]');
+      if (!btn) return;
+      if (!confirm('この SOS を「対応済み」にしますか？')) return;
+      await guard(() => Api.handleSignal(btn.dataset.handle));
+      refresh(); refreshSos();
+    });
+
+    if (!id) {
+      showError('端末の番号がありません。端末一覧から開いてください。');
+    } else {
+      guard(() => mountSendForm($('#send'), { deviceId: id, onSent: refresh }));
+      poll(refresh);
+    }
+  </script>
+</body>
+</html>

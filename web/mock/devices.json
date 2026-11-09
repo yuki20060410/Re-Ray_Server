@@ -1,0 +1,7 @@
+[
+  { "id": 1, "owner_name": "山田", "position_id": 3, "is_online": true,  "via": "wifi", "battery": 72,  "has_glass": true,  "last_seen_at": "2026-11-06T14:58:10+09:00" },
+  { "id": 2, "owner_name": "佐藤", "position_id": 2, "is_online": true,  "via": "wifi", "battery": 91,  "has_glass": true,  "last_seen_at": "2026-11-06T14:59:40+09:00" },
+  { "id": 3, "owner_name": "鈴木", "position_id": 4, "is_online": true,  "via": "lora", "battery": 55,  "has_glass": false, "last_seen_at": "2026-11-06T14:57:05+09:00" },
+  { "id": 4, "owner_name": "高橋", "position_id": 1, "is_online": false, "via": "wifi", "battery": 8,   "has_glass": true,  "last_seen_at": "2026-11-06T14:20:33+09:00" },
+  { "id": 5, "owner_name": null,   "position_id": null, "is_online": true, "via": "wifi", "battery": 100, "has_glass": false, "last_seen_at": "2026-11-06T14:59:55+09:00" }
+]

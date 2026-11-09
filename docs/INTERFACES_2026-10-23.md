@@ -1,6 +1,6 @@
 # INTERFACES — サーバーの入出力
 
-> 更新: 2026-10-23 / 状態: **ドラフト**(2026-11-06 に `dir`、出口の生渡し、統合案で決まった LoRa の下りを反映)
+> 更新: 2026-10-23 / 状態: **ドラフト**(2026-11-06 に `dir`、出口の生渡し、統合案で決まった LoRa の下りを反映。2026-11-09 に管理画面のための API・項目を §4.5 に【案】で追記)
 > このサーバーが外とやり取りする面を、すべてここに書く。
 > 共通仕様への統合案は `共通仕様/00_統合案_2026-10-23.md`(C-01〜C-22)。合意されたら、この文書の【案】を外す。
 
@@ -38,6 +38,7 @@
 | GET・POST・PUT | `/api/instruction-codes`、`/api/instruction-codes/{code}` | 【案】指示コード表(§4.3) |
 | POST | `/api/transcripts` | 【案】文字起こしの文を受けて配る(§4.3) |
 | GET | `/api/health`、`/api/stream`、`/api/export/{table}.csv` | 【追加案】状態、SSE、CSV |
+| GET・POST | `/api/messages?limit=`、`/api/signal-codes`、`/api/sos`、`/api/signals/{id}/handle`、`/api/dev/...` | 【案】2026-11-09 に管理画面(`web/`)のために足した(§4.5) |
 
 ---
 
@@ -436,6 +437,39 @@ JSON、UTF-8。パスの接頭辞は `/api`。検証版は認証なし(ローカ
 | 404 | 存在しない |
 | 422 | 内容の誤り |
 | 503 | MQTT に接続できない |
+
+### 4.5 管理画面のために足したもの【案】(2026-11-09)
+
+やまさんの管理画面(`web/`。B 案の表で作られた `reray-app` の画面)を取り込むときに、サーバーに足した。
+共通仕様(`サーバーサイド/01_API`)にはまだ無いので【案】。実装は `src/http/app.ts`(形は `src/http/views.ts`)。
+
+**API**
+
+| 方法 | パス | すること |
+|---|---|---|
+| GET | `/api/messages?limit=10` | 最近送ったもの(新しい順、最大 100) |
+| GET | `/api/signal-codes` | 定型信号の一覧(名前・短い名前・`is_sos` など。B 案の `signal_codes`) |
+| GET | `/api/sos` | まだ対応していない SOS(一覧で `is_sos` の番号) |
+| POST | `/api/signals/{id}/handle` | SOS を対応済みにする(`handled_at`。2 回目は最初の時刻のまま) |
+| POST | `/api/dev/signal`、`/api/dev/devices/{id}/toggle-online`・`toggle-via` | 【追加案】テスト用。`DEV_TOOLS=1` のときだけ。サーバーの中の偽の端末を動かす |
+
+**項目**
+
+| どこ | 足した項目 |
+|---|---|
+| 端末(`/api/devices`) | `last_seen_at`、`created_at`、`lat`・`lon`、`open_sos`(未対応の SOS)。`last_signal` は下の signal の形 |
+| signal | `id`、`device`、`owner`、`seq`、`is_sos`、`position {no, name}`、`dir`、`via`、`out_of_range`(n・dir が区分外)、`at`、`device_ts`、`handled_at` |
+| 1 通(`/api/messages/{id}`) | `kind`(free / order)、`source`(web / transcript)、`icode`・`pos`、`publish_state`、`requires_response`、`offline`(送った時に切れていた端末)、`summary`(画面にそのまま出す数)、`devices[].skipped`・`response`・`responded_at` |
+| ポジション | `lat`・`lon`(B 案) |
+| 指示コード | B 案の形:`name`、`uses_position`、`text_with_pos`(「{ポジション名}へ移動してください」)、`text_without_pos`、`requires_response`、`strength`。§4.3 の `text` の形は使っていない |
+| 記録(`/api/logs`) | `type` は `signal` / `sos` / `message`。期間は `from`・`to`、件数は `limit`(最大 500)。返す形は `{type, at, signal}` か `{type, at, message}` |
+| 文字起こし | `transcripts` の表は作らず、返すのは `{id}` だけ(`messages.source = transcript`。DB案の比較 §5) |
+
+**MQTT**
+
+- ack に `ack_kind` を足した:3 = 受け取った(省略時)、4 = 了解、5 = できない(統合案 差分6 の案)。1 通・1 端末につき、最初の返事だけを残す。
+  `SIGNAL_FORMAT` §6-3 の「v1 は端末に届いた まで」より先に進んでいる(DB案の比較 §3)。
+- 自由な文を、送った時に LoRa だった端末に宛てたものは「送らなかった」(`skipped`)として別に数える(B 案の `is_skipped`)。
 
 ---
 

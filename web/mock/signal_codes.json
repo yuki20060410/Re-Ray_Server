@@ -1,0 +1,11 @@
+[
+  { "code": 1, "name": "SOS",          "short_name": "SOS",   "is_sos": true,  "priority": "highest", "quantity_unit": null },
+  { "code": 2, "name": "無事",         "short_name": "無事",  "is_sos": false, "priority": "normal",  "quantity_unit": null },
+  { "code": 3, "name": "了解",         "short_name": "了解",  "is_sos": false, "priority": "normal",  "quantity_unit": null },
+  { "code": 4, "name": "到着",         "short_name": "到着",  "is_sos": false, "priority": "normal",  "quantity_unit": null },
+  { "code": 5, "name": "応援を頼む",   "short_name": "応援",  "is_sos": false, "priority": "high",    "quantity_unit": "人" },
+  { "code": 6, "name": "要救助者あり", "short_name": "要救助","is_sos": false, "priority": "high",    "quantity_unit": "人" },
+  { "code": 7, "name": "負傷者あり",   "short_name": "負傷",  "is_sos": false, "priority": "high",    "quantity_unit": "人" },
+  { "code": 8, "name": "食料がほしい", "short_name": "食料",  "is_sos": false, "priority": "normal",  "quantity_unit": "食" },
+  { "code": 9, "name": "移動します",   "short_name": "移動",  "is_sos": false, "priority": "normal",  "quantity_unit": null }
+]

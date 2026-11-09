@@ -1,0 +1,8 @@
+[
+  { "code": 1,  "name": "移動",   "uses_position": true,  "text_with_pos": "{ポジション名}へ移動してください", "text_without_pos": null },
+  { "code": 2,  "name": "集合",   "uses_position": true,  "text_with_pos": "{ポジション名}に集合してください", "text_without_pos": null },
+  { "code": 3,  "name": "待機",   "uses_position": false, "text_with_pos": null, "text_without_pos": "その場で待機してください" },
+  { "code": 20, "name": "応援",   "uses_position": true,  "text_with_pos": "{ポジション名}の応援に向かってください", "text_without_pos": null },
+  { "code": 40, "name": "状況報告", "uses_position": false, "text_with_pos": null, "text_without_pos": "いまの状況を報告してください" },
+  { "code": 6,  "name": "退避",   "uses_position": true,  "text_with_pos": "{ポジション名}へ退避してください", "text_without_pos": null }
+]

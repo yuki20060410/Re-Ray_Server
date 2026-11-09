@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>端末一覧 | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <h1>端末一覧</h1>
+    <div class="summary" id="summary"></div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th><th>名前</th><th>端末</th><th>ポジション</th><th>つながり</th>
+            <th>経路</th><th>電池</th><th>グラス</th><th>最後の連絡</th>
+          </tr>
+        </thead>
+        <tbody id="rows"><tr><td colspan="9" class="empty">読み込み中…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="muted">SOS の端末 → 切れた端末 → それ以外 の順に並びます。2秒ごとに自動で更新します。行を押すと詳細を開きます。</p>
+
+    <!-- 偽のサーバーのときだけ出す -->
+    <section class="card test-panel" id="test-panel" hidden>
+      <h2>テスト用（端末ができるまでの仮の操作）</h2>
+      <div class="row">
+        <select id="t-device"></select>
+        <select id="t-code"></select>
+        <input id="t-qty" type="number" min="5" max="100" step="5" placeholder="数（人数など）" style="width:130px">
+        <button class="btn" id="t-send">この信号が届いたことにする</button>
+      </div>
+      <div class="row">
+        <button class="btn" id="t-online">選んだ端末のつながりを切り替える</button>
+        <button class="btn" id="t-via">選んだ端末の経路を Wi-Fi / LoRa で切り替える</button>
+        <button class="btn danger" id="t-reset">データを最初に戻す</button>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('index.html');
+
+    // SOS が残っている → 切れた → それ以外。同じなら端末の番号順
+    function rank(d) {
+      if (d.open_sos.length) return 0;
+      if (!d.is_online) return 1;
+      return 2;
+    }
+
+    function row(d) {
+      const sos = d.open_sos.length > 0;
+      const cls = ['clickable', sos ? 'row-sos' : '', !d.is_online ? 'row-off' : ''].join(' ');
+      const last = d.last_signal;
+      return `<tr class="${cls}" data-id="${d.id}">
+        <td>${sos ? '<span class="tag sos">SOS</span>' : ''}</td>
+        <td><strong>${esc(ownerOf(d))}</strong></td>
+        <td class="muted">${deviceLabel(d.id)}</td>
+        <td>${esc(d.position ? `${d.position.id}: ${d.position.name}` : '—')}</td>
+        <td><span class="dot ${d.is_online ? 'on' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}
+            ${!d.is_online && d.last_seen_at ? `<div class="muted" style="font-size:12px">${fmtAgo(d.last_seen_at)}から</div>` : ''}</td>
+        <td>${d.via ? `<span class="tag ${d.via}">${viaLabel(d.via)}</span>` : '—'}</td>
+        <td>${batteryHtml(d.battery)}</td>
+        <td>${d.has_glass ? 'つながっている' : '<span class="muted">なし</span>'}</td>
+        <td>${last ? `${last.is_sos ? '<span class="tag sos">SOS</span>' : esc(signalLabel(last))}
+            <div class="muted" style="font-size:12px">${fmtTime(last.received_at)}（${fmtAgo(last.received_at)}）</div>` : '<span class="muted">まだない</span>'}</td>
+      </tr>`;
+    }
+
+    async function refresh() {
+      const devices = await Api.getDevices();
+      devices.sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+      const on = devices.filter(d => d.is_online).length;
+      const sos = devices.filter(d => d.open_sos.length).length;
+      $('#summary').innerHTML = `
+        <div class="stat"><span class="muted">全部</span><b>${devices.length}台</b></div>
+        <div class="stat"><span class="muted">つながっている</span><b>${on}台</b></div>
+        <div class="stat off"><span class="muted">切れた</span><b>${devices.length - on}台</b></div>
+        <div class="stat sos"><span class="muted">SOS（未対応）</span><b>${sos}台</b></div>`;
+      $('#rows').innerHTML = devices.length ? devices.map(row).join('')
+        : '<tr><td colspan="9" class="empty">端末がまだありません</td></tr>';
+    }
+
+    $('#rows').addEventListener('click', (e) => {
+      const tr = e.target.closest('tr[data-id]');
+      if (tr) location.href = `device.html?id=${tr.dataset.id}`;
+    });
+
+    poll(refresh);
+
+    // ---- テスト用の操作 ----
+    if (devToolsOn()) {
+      $('#test-panel').hidden = false;
+      $('#t-reset').hidden = !isMock();   // 2026-11-06: 本物のサーバーには「最初に戻す」が無い（DB を消す API は作らない）
+      (async () => {
+        const [devices, codes] = await Promise.all([Api.getDevices(), Api.getSignalCodes()]);
+        $('#t-device').innerHTML = devices.map(d => `<option value="${d.id}">${deviceLabel(d.id)} ${esc(ownerOf(d))}</option>`).join('');
+        $('#t-code').innerHTML = codes.map(c => `<option value="${c.code}">${c.code}: ${esc(c.name)}</option>`).join('');
+      })();
+      $('#t-send').onclick = () => guard(async () => {
+        await Api.dev.signal({ device_id: $('#t-device').value, code: $('#t-code').value, quantity: $('#t-qty').value });
+        refresh(); refreshSos();
+      });
+      $('#t-online').onclick = () => guard(async () => { await Api.dev.toggleOnline($('#t-device').value); refresh(); });
+      $('#t-via').onclick = () => guard(async () => { await Api.dev.toggleVia($('#t-device').value); refresh(); });
+      $('#t-reset').onclick = () => guard(async () => {
+        if (!confirm('データを最初の状態に戻します。送った指示や登録も消えます。よろしいですか？')) return;
+        await Api.dev.reset();
+        sessionStorage.removeItem(SOS_SEEN_KEY);
+        location.reload();
+      });
+    }
+  </script>
+</body>
+</html>
