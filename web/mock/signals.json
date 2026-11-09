@@ -1,0 +1,7 @@
+[
+  { "id": 101, "device_id": 4, "code": 2, "position_id": 1, "quantity": null, "via": "wifi", "received_at": "2026-11-06T14:10:00+09:00", "handled_at": null },
+  { "id": 102, "device_id": 1, "code": 1, "position_id": 3, "quantity": null, "via": "wifi", "received_at": "2026-11-06T14:15:40+09:00", "handled_at": "2026-11-06T14:22:00+09:00" },
+  { "id": 103, "device_id": 3, "code": 6, "position_id": 4, "quantity": 5,    "via": "lora", "received_at": "2026-11-06T14:45:12+09:00", "handled_at": null },
+  { "id": 104, "device_id": 2, "code": 4, "position_id": 2, "quantity": null, "via": "wifi", "received_at": "2026-11-06T14:51:30+09:00", "handled_at": null },
+  { "id": 105, "device_id": 1, "code": 1, "position_id": 3, "quantity": null, "via": "wifi", "received_at": "2026-11-06T14:58:02+09:00", "handled_at": null }
+]

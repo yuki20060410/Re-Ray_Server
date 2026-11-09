@@ -24,14 +24,16 @@ services:
       MYSQL_USER: ${DB_USER:-reray}
       MYSQL_PASSWORD: ${DB_PASS:?.env に DB_PASS を書いてください}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:?.env に DB_ROOT_PASS を書いてください}
-    # 文字コードは utf8mb4、時間帯は UTC に固定(DATA_MODEL §1)
+    # 文字コードは utf8mb4、時間帯は日本時間に固定
+    # 2026-11-06: B 案の表(db/init/01_schema.sql)に合わせて +00:00 → +09:00 にした。
+    #   サーバーも同じ時間帯でつなぐ(src/storage/mysql.ts の DB_TIME_ZONE)。DB-012 で UTC に決まったら両方を戻す
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_0900_ai_ci
-      - --default-time-zone=+00:00
+      - --default-time-zone=+09:00
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./db/init:/docker-entrypoint-initdb.d:ro   # 初回起動時に .sql を流す(表の定義を置く予定)
+      - ./db/init:/docker-entrypoint-initdb.d:ro   # 初回起動時に .sql を名前の順に流す(db/init/README.md)
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
@@ -49,6 +51,10 @@ services:
       MQTT_URL: mqtt://mosquitto:1883
       DB_HOST: mysql
       DB_PORT: "3306"
+      STORAGE: mysql
+      HTTP_PORT: "3000"
+    ports:
+      - "${HTTP_PORT:-3000}:3000"   # 管理画面と API(2026-11-06 追加)
     depends_on:
       mosquitto:
         condition: service_started

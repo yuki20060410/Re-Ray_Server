@@ -121,6 +121,16 @@ describe("ack", () => {
   it("どの text への確認か分からないものは捨てる", () => {
     assert.equal(reason(topic, base), "ack target");
   });
+
+  // 2026-11-06 追加: 了解・できない(ack_kind 4・5)【案】
+  it("ack_kind は省略で 3(受け取った)。4 = 了解、5 = できない。ほかは捨てる", () => {
+    const kind = (k: unknown) => {
+      const r = parseUp(topic, json({ ...base, ack_mid: 12, ...(k !== undefined && { ack_kind: k }) }));
+      return r.ok && r.message.type === "ack" ? r.message.ackKind : r.ok ? null : r.reason;
+    };
+    assert.deepEqual([kind(undefined), kind(3), kind(4), kind(5)], [3, 3, 4, 5]);
+    assert.deepEqual([kind(1), kind(6), kind("4")], ["ack_kind", "ack_kind", "ack_kind"]);
+  });
 });
 
 describe("出口の生渡し", () => {

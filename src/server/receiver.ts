@@ -3,14 +3,18 @@
 // MQTT には依存しない(テストではブローカーなしで呼ぶ)。順番:
 // 1. events に原本を書く → 2. 確かめる(だめなら invalid)→ 3. 重複の判定と保存 →
 // 4. signal なら、重複で捨てた場合も含めて「本部に届いた」を返す
+// 2026-11-06: ack の対応づけ(M3)と、了解・できない(ack_kind 4・5)、範囲外の印を足した
 
 import { downAckTopic } from "../protocol/topics.js";
-import { MAX_PAYLOAD_BYTES, parseUp, type UpMessage } from "../protocol/validate.js";
-import type { EventResult, Storage } from "../storage/types.js";
+import { MAX_PAYLOAD_BYTES, parseUp, type AckMessage, type SignalMessage, type UpMessage } from "../protocol/validate.js";
+import type { AckResponse, EventResult, Storage } from "../storage/types.js";
 import type { PcSeq } from "./pcSeq.js";
 
 /** 重複とみなす範囲(直近 10 分の同じ src + seq。ARCHITECTURE §6) */
 export const DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
+/** ack_seq だけの ack を対応づけるとき、さかのぼる範囲(INTERFACES §2.4 の暫定) */
+export const ACK_SEQ_WINDOW_MS = 10 * 60 * 1000;
 
 export interface ReceiverDeps {
   storage: Storage;
@@ -84,6 +88,7 @@ export class Receiver {
             via: message.via,
             deviceTs: message.ts === null ? null : new Date(message.ts * 1000),
             receivedAt,
+            outOfRange: isOutOfRange(message),
           },
           DEDUP_WINDOW_MS,
         );
@@ -97,15 +102,51 @@ export class Receiver {
         return { result: "accepted" };
       }
       case "lastwill":
-        await this.storage.setOnline(message.src, false);
+        await this.storage.markOffline(message.src, "lastwill", receivedAt);
         return { result: "accepted" };
       case "ack":
-        // 届いた確認の対応づけは M3 で作る。今は「何か届いた」だけ反映する
+        // 対応づけられなくても、端末から何か届いたことは反映する(ARCHITECTURE §5)
         await this.storage.touchDevice(message.src, receivedAt);
-        return { result: "ignored", note: "ack matching not yet (M3)" };
+        return this.matchAck(message, receivedAt);
       case "gateway":
         // LoRa のフレームの分解は次に作る(GATEWAY_RAW_FORMAT)。今は原本だけ残す
         return { result: "ignored", note: "lora decode not yet" };
+    }
+  }
+
+  /**
+   * ack を、どの 1 通への確認かに対応づけて残す(INTERFACES §2.4 の暫定)。
+   * - `ack_mid` がある → messages.id に直接
+   * - `ack_seq` だけ → 直近 10 分に同じ seq で送り、この端末が宛先に入っている 1 通。
+   *   2 通以上あれば曖昧なので対応づけない(unmatched。原本に残る)
+   */
+  private async matchAck(message: AckMessage, receivedAt: Date): Promise<HandleOutcome> {
+    if (message.ackMid === undefined && message.ackSrc !== undefined && message.ackSrc !== "pc") {
+      return { result: "ignored", note: "ack_src not pc" };
+    }
+
+    let mid = message.ackMid;
+    if (mid === undefined) {
+      const since = new Date(receivedAt.getTime() - ACK_SEQ_WINDOW_MS);
+      const sameSeq = await this.storage.findMessagesBySeq(message.ackSeq ?? -1, since);
+      const deliveries = await this.storage.listDeliveries(sameSeq.map((m) => m.id));
+      const mine = sameSeq.filter((m) => deliveries.get(m.id)?.some((d) => d.deviceId === message.src));
+      if (mine.length === 0) return { result: "unmatched", note: "no message for ack_seq" };
+      if (mine.length > 1) return { result: "unmatched", note: "ambiguous ack_seq" };
+      mid = mine[0]?.id;
+    }
+    if (mid === undefined) return { result: "unmatched", note: "no message for ack_seq" };
+
+    const response: AckResponse | undefined =
+      message.ackKind === 4 ? "accepted" : message.ackKind === 5 ? "declined" : undefined;
+    const r = await this.storage.recordAck(mid, message.src, receivedAt, response);
+    switch (r.kind) {
+      case "saved":
+        return { result: "accepted", note: `mid=${mid}${response ? ` ${response}` : ""}` };
+      case "duplicate":
+        return { result: "duplicate", note: `mid=${mid}` };
+      case "not_target":
+        return { result: "unmatched", note: `mid=${mid} not a target` };
     }
   }
 
@@ -144,6 +185,16 @@ export class Receiver {
     this.sending.add(job);
     void job.finally(() => this.sending.delete(job));
   }
+}
+
+/**
+ * 【案】数量 n・方角 dir が区分外・範囲外か(SIGNAL_FORMAT §2。保存はするが、画面で印を付ける)。
+ * n は 5 人きざみの 5〜100、dir は 1〜8。一覧(signal_codes)と合っているかまでは見ない
+ */
+export function isOutOfRange(m: Pick<SignalMessage, "n" | "dir">): boolean {
+  const badN = m.n !== undefined && !(m.n >= 5 && m.n <= 100 && m.n % 5 === 0);
+  const badDir = m.dir !== undefined && !(m.dir >= 1 && m.dir <= 8);
+  return badN || badDir;
 }
 
 /** 原本に入れる文字列。生渡しのバイナリは 16 進、それ以外は UTF-8(4 KB で切る) */

@@ -34,6 +34,11 @@ export function downAckTopic(deviceId: string): string {
   return `${TOPIC_PREFIX}/down/${deviceId}/ack`;
 }
 
+/** 文字・指示コードを流すトピック。dst は端末ID か "all"(一斉) */
+export function downTextTopic(dst: string): string {
+  return `${TOPIC_PREFIX}/down/${dst}/text`;
+}
+
 // ---- 端末ID ----
 
 /** 端末に割り当てる番号の範囲(0 = サーバー、65535 = 全員 は使わない) */
@@ -55,4 +60,9 @@ export function deviceNumber(id: string): number | null {
 /** 番号から `dev-001` の形にする(LoRa の 16 ビットの src を直すときにも使う) */
 export function formatDeviceId(no: number): string {
   return `dev-${String(no).padStart(3, "0")}`;
+}
+
+/** 端末ID の並べ方(番号の順。文字の順だと dev-1000 が dev-999 より前に来るため) */
+export function compareDeviceId(a: string, b: string): number {
+  return (deviceNumber(a) ?? Number.MAX_SAFE_INTEGER) - (deviceNumber(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b);
 }

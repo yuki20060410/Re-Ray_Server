@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>端末の登録 | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <h1>端末の登録</h1>
+    <p class="muted">端末の番号と、持つ人の名前をひも付けます。名前のない端末は、一覧で「（未登録）」と出ます。</p>
+
+    <section class="card">
+      <h2>追加する</h2>
+      <form id="add" class="filters" novalidate>
+        <label>端末の番号 <input type="number" name="id" min="1" max="65534" style="width:120px" placeholder="6 → dev-006"></label>
+        <label>持つ人の名前 <input type="text" name="owner_name" maxlength="30" placeholder="例: 伊藤"></label>
+        <button class="btn primary" type="submit">追加</button>
+      </form>
+    </section>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>端末</th><th>持つ人の名前</th><th>つながり</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('devices.html');
+
+    // 入力中に書き換わらないよう、この画面は自動更新しない
+    async function refresh() {
+      const list = (await Api.getDevices()).sort((a, b) => a.id - b.id);
+      $('#rows').innerHTML = list.map(d => `<tr data-id="${d.id}">
+          <td><strong>${deviceLabel(d.id)}</strong></td>
+          <td><input type="text" name="owner_name" value="${esc(d.owner_name)}" maxlength="30" placeholder="（未登録）"></td>
+          <td><span class="dot ${d.is_online ? 'on' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}</td>
+          <td><button class="btn small" data-act="save">名前を保存</button></td>
+        </tr>`).join('');
+    }
+
+    $('#rows').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act=save]');
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      const ok = await guard(() => Api.updateDevice(tr.dataset.id, { owner_name: tr.querySelector('[name=owner_name]').value.trim() }));
+      if (ok) { btn.textContent = '保存しました'; setTimeout(refresh, 800); }
+    });
+
+    $('#add').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const ok = await guard(() => Api.createDevice({ id: Number(f.elements['id'].value), owner_name: f.owner_name.value.trim() }));
+      if (ok) { f.reset(); refresh(); }
+    });
+
+    guard(refresh);
+  </script>
+</body>
+</html>

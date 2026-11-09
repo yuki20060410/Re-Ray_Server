@@ -145,6 +145,75 @@ describe("受信(status・遺言・そのほか)", () => {
   });
 });
 
+// 2026-11-06 追加: ack の対応づけ(M3)と 了解・できない【案】
+describe("受信(ack)", () => {
+  function ack(over: Record<string, unknown>): [string, Uint8Array] {
+    const body = { v: 1, type: "ack", src: "dev-001", seq: 44, ts: 1, ...over };
+    return [`reray/v1/up/${String(body.src)}/ack`, Buffer.from(JSON.stringify(body))];
+  }
+
+  async function sent(storage: MemoryStorage, seq: number, sentAt: number, targets: string[]) {
+    return storage.createMessage(
+      { seq, dst: "all", body: "x", kind: "free", source: "web", sentAt: new Date(sentAt) },
+      targets.map((deviceId) => ({ deviceId, viaAtSend: "wifi" as const })),
+    );
+  }
+
+  it("ack_mid で直接対応づける。2 回目は duplicate", async () => {
+    const { storage, receiver } = setup();
+    const m = await sent(storage, 7, T0, ["dev-001"]);
+    assert.equal((await receiver.handle(...ack({ ack_mid: m.id }))).result, "accepted");
+    assert.equal((await receiver.handle(...ack({ ack_mid: m.id }))).result, "duplicate");
+    assert.deepEqual((await storage.getDeliveries(m.id))[0]?.ackedAt, new Date(T0));
+  });
+
+  it("ack_kind 4・5 は 了解・できない として残す", async () => {
+    const { storage, receiver } = setup();
+    const m = await sent(storage, 7, T0, ["dev-001", "dev-002"]);
+    await receiver.handle(...ack({ ack_mid: m.id, ack_kind: 4 }));
+    await receiver.handle(...ack({ src: "dev-002", ack_mid: m.id, ack_kind: 5 }));
+    assert.deepEqual(
+      (await storage.getDeliveries(m.id)).map((d) => d.response),
+      ["accepted", "declined"],
+    );
+  });
+
+  it("ack_seq だけなら、直近 10 分で同じ seq の、自分が宛先の 1 通に対応づける", async () => {
+    const { storage, receiver } = setup();
+    await sent(storage, 7, T0 - 11 * 60 * 1000, ["dev-001"]); // 10 分より前
+    await sent(storage, 7, T0 - 60 * 1000, ["dev-002"]); // 宛先ではない
+    const mine = await sent(storage, 7, T0 - 30 * 1000, ["dev-001"]);
+    const out = await receiver.handle(...ack({ ack_src: "pc", ack_seq: 7 }));
+    assert.equal(out.result, "accepted");
+    assert.deepEqual((await storage.getDeliveries(mine.id))[0]?.ackedAt, new Date(T0));
+  });
+
+  it("ack_seq で 2 通以上あてはまれば、曖昧なので対応づけない", async () => {
+    const { storage, receiver } = setup();
+    await sent(storage, 7, T0 - 60 * 1000, ["dev-001"]);
+    await sent(storage, 7, T0 - 30 * 1000, ["dev-001"]);
+    assert.deepEqual(await receiver.handle(...ack({ ack_seq: 7 })), { result: "unmatched", note: "ambiguous ack_seq" });
+  });
+
+  it("無い mid・宛先でない端末は unmatched。それでも端末は「つながっている」になる", async () => {
+    const { storage, receiver } = setup();
+    const m = await sent(storage, 7, T0, ["dev-002"]);
+    assert.equal((await receiver.handle(...ack({ ack_mid: 999 }))).result, "unmatched");
+    assert.equal((await receiver.handle(...ack({ ack_mid: m.id }))).result, "unmatched");
+    assert.equal((await storage.getDevice("dev-001"))?.online, true);
+  });
+});
+
+describe("範囲外の印", () => {
+  it("n は 5 きざみの 5〜100、dir は 1〜8。外れたら印を付けて保存する", async () => {
+    const { storage, receiver } = setup();
+    await receiver.handle(...signal({ seq: 1, n: 20, dir: 2 }));
+    await receiver.handle(...signal({ seq: 2, n: 7 }));
+    await receiver.handle(...signal({ seq: 3, n: undefined, dir: 9 }));
+    assert.deepEqual(storage.signals.map((s) => s.outOfRange), [false, true, true]);
+  });
+});
+
 describe("pc の連番", () => {
   it("65535 の次は 0。再起動したら最後の messages の seq の次から", async () => {
     const s = new PcSeq(65535);

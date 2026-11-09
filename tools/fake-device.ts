@@ -9,6 +9,9 @@
 //   npm run fake -- will   --id dev-001                              遺言を登録してから、黙って切れる
 //   npm run fake -- raw    --topic reray/v1/up/dev-001/signal --payload "{"   形の崩れたものを送る
 //   npm run fake -- listen --id dev-001                              下り(text・本部に届いた)を表示し続ける
+//   npm run fake -- listen --id dev-001 --ack 3                      届いた text に ack(ack_mid)を返す(4 = 了解、5 = できない)
+//
+// 2026-11-06: listen に --ack を足した(M3 の届き具合を手で確かめるため)
 //
 // 端末と同じく、クライアントID = 端末ID、永続セッション、keepalive 30 秒でつなぐ(DATAFLOW §8.3)。
 // seq を指定しなければ、端末と同じく乱数から始める(修正案 #3)。
@@ -37,6 +40,7 @@ const { positionals, values } = parseArgs({
     topic: { type: "string" },
     payload: { type: "string" },
     wait: { type: "string", default: "5" },
+    ack: { type: "string" },
   },
 });
 
@@ -47,13 +51,21 @@ const num = (v: string | undefined) => (v === undefined ? undefined : Number(v))
 
 /** 下りを受けたときの処理。つないだ直後に溜まっていた分が届くので、つなぐ前に付けておく */
 const acked = new Set<number>();
+/** listen --ack のとき、text に ack を返すためのクライアント */
+let ackClient: MqttClient | null = null;
 
 function onDown(topic: string, payload: Buffer): void {
   const text = payload.toString("utf8");
   console.log(`← ${topic} ${text}`);
   try {
-    const body = JSON.parse(text) as { type?: string; ack_seq?: number };
+    const body = JSON.parse(text) as { type?: string; ack_seq?: number; mid?: number };
     if (body.type === "ack" && typeof body.ack_seq === "number") acked.add(body.ack_seq);
+    if (body.type === "text" && typeof body.mid === "number" && ackClient && values.ack) {
+      void publish(ackClient, `reray/v1/up/${id}/ack`, {
+        v: 1, type: "ack", src: id, seq: Math.floor(Math.random() * 65536), ts: now(),
+        ack_mid: body.mid, ack_kind: Number(values.ack),
+      });
+    }
   } catch {
     // 表示だけ
   }
@@ -156,6 +168,7 @@ async function main(): Promise<void> {
     }
     case "listen": {
       const client = await connect();
+      ackClient = client;
       await listenDown(client);
       console.log(`下りを待っています(${id})。Ctrl+C で止める`);
       break;

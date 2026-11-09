@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>記録 | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <h1>記録</h1>
+    <div class="filters">
+      <label>端末
+        <select id="f-device"><option value="">すべて</option></select>
+      </label>
+      <label>種類
+        <select id="f-type">
+          <option value="">すべて</option>
+          <option value="signal">届いた定型信号</option>
+          <option value="sos">SOS だけ</option>
+          <option value="message">本部から送ったもの</option>
+        </select>
+      </label>
+      <label>日付
+        <input type="date" id="f-date">
+      </label>
+      <button class="btn" id="f-clear">しぼり込みを外す</button>
+      <span class="muted" id="count"></span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead id="log-head"></thead>
+        <tbody id="logs"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('logs.html');
+    $('#log-head').innerHTML = LOG_HEAD;
+
+    const filters = () => ({ device_id: $('#f-device').value, type: $('#f-type').value, date: $('#f-date').value });
+
+    async function refresh() {
+      const logs = await Api.getLogs(filters());
+      $('#count').textContent = `${logs.length} 件`;
+      $('#logs').innerHTML = logs.length ? logs.map(logRowHtml).join('')
+        : '<tr><td colspan="6" class="empty">当てはまる記録はありません</td></tr>';
+    }
+
+    ['#f-device', '#f-type', '#f-date'].forEach(s => $(s).addEventListener('change', () => guard(refresh)));
+    $('#f-clear').onclick = () => { $('#f-device').value = ''; $('#f-type').value = ''; $('#f-date').value = ''; guard(refresh); };
+
+    $('#logs').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-handle]');
+      if (!btn) return;
+      if (!confirm('この SOS を「対応済み」にしますか？')) return;
+      await guard(() => Api.handleSignal(btn.dataset.handle));
+      refresh(); refreshSos();
+    });
+
+    guard(async () => {
+      const devices = await Api.getDevices();
+      $('#f-device').insertAdjacentHTML('beforeend',
+        devices.map(d => `<option value="${d.id}">${deviceLabel(d.id)} ${esc(ownerOf(d))}</option>`).join(''));
+      const pre = param('device_id');
+      if (pre) $('#f-device').value = pre;
+      poll(refresh);
+    });
+  </script>
+</body>
+</html>

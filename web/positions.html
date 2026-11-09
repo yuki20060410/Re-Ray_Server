@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ポジション | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <h1>ポジション（場所の番号）</h1>
+    <p class="muted">端末と指示では番号（1〜255）だけをやり取りします。ここで番号に名前を付けると、本部の画面とグラスの文に名前が出ます。
+      回線が切れている端末には、つながるまで新しい名前は届きません。</p>
+
+    <section class="card">
+      <h2>追加する</h2>
+      <form id="add" class="filters" novalidate>
+        <label>番号 <input type="number" name="id" min="1" max="255" style="width:90px" required></label>
+        <label>名前 <input type="text" name="name" maxlength="30" placeholder="例: 西門" required></label>
+        <label>メモ <input type="text" name="note" maxlength="100" placeholder="例: 公園の西側"></label>
+        <label>緯度 <input type="text" name="lat" placeholder="35.68" style="width:110px"></label>
+        <label>経度 <input type="text" name="lon" placeholder="139.76" style="width:110px"></label>
+        <button class="btn primary" type="submit">追加</button>
+      </form>
+    </section>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>番号</th><th>名前</th><th>メモ</th><th>緯度</th><th>経度</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('positions.html');
+
+    // 入力中に書き換わらないよう、この画面は自動更新しない（保存したときだけ読み直す）
+    async function refresh() {
+      const list = await Api.getPositions();
+      $('#rows').innerHTML = list.length ? list.map(p => `<tr data-id="${p.id}">
+          <td><strong>${p.id}</strong></td>
+          <td><input type="text" name="name" value="${esc(p.name)}" maxlength="30"></td>
+          <td><input type="text" name="note" value="${esc(p.note)}" maxlength="100"></td>
+          <td><input type="text" name="lat" value="${esc(p.lat)}" style="width:110px"></td>
+          <td><input type="text" name="lon" value="${esc(p.lon)}" style="width:110px"></td>
+          <td style="white-space:nowrap">
+            <button class="btn small" data-act="save">保存</button>
+            <button class="btn small danger" data-act="del">消す</button>
+          </td>
+        </tr>`).join('')
+        : '<tr><td colspan="6" class="empty">まだありません</td></tr>';
+    }
+
+    $('#rows').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const tr = btn.closest('tr');
+      const id = Number(tr.dataset.id);
+      const val = (n) => tr.querySelector(`[name=${n}]`).value;
+      if (btn.dataset.act === 'save') {
+        const ok = await guard(() => Api.savePosition({ id, name: val('name'), note: val('note'), lat: val('lat'), lon: val('lon') }));
+        if (ok) { btn.textContent = '保存しました'; setTimeout(refresh, 800); }
+      } else {
+        if (!confirm(`ポジション ${id} を消しますか？`)) return;
+        const ok = await guard(() => Api.deletePosition(id));
+        if (ok) refresh();
+      }
+    });
+
+    $('#add').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const id = Number(f.elements['id'].value);
+      const exists = (await Api.getPositions()).some(p => p.id === id);
+      if (exists && !confirm(`番号 ${id} はもうあります。上書きしますか？`)) return;
+      const ok = await guard(() => Api.savePosition({ id, name: f.elements['name'].value, note: f.note.value, lat: f.lat.value, lon: f.lon.value }));
+      if (ok) { f.reset(); refresh(); }
+    });
+
+    guard(refresh);
+  </script>
+</body>
+</html>

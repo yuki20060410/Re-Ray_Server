@@ -60,10 +60,10 @@ flowchart LR
 | 要素 | 内容 |
 |---|---|
 | ブローカー | Mosquitto(`config/mosquitto.conf`)。本番に移るまでは Docker、本番の置き場所は未決 |
-| サーバーアプリ | MQTT の購読・検証・重複排除・保存、端末の状態の判定、文字の送信と ack の集計、HTTP API |
-| DB | チーム案の4表(devices / messages / signals / acks)+ positions / instruction_codes / transcripts【案】+ 原本 events【追加案】。**MySQL** |
-| 管理PCの画面 | 別パート。サーバーの API を使う |
-| 疑似端末ツール | 実機なしで signal / status / ack を流す検証用スクリプト(`tools/`)【追加案】 |
+| サーバーアプリ | MQTT の購読・検証・重複排除・保存、端末の状態の判定、文字の送信と ack の集計、HTTP API(`src/`) |
+| DB | **MySQL**。表は DB の担当の B 案(`db/init/01_schema.sql`)+ サーバーが足してほしいもの(`03_server.sql`。原本 events など)。サーバーは保存の窓口(`src/storage/types.ts`)だけを使う |
+| 管理PCの画面 | やまさん作(別パート)。2026-11-06 に `web/` に取り込み、サーバーが配る(`web/README.md`) |
+| 疑似端末ツール | 実機なしで signal / status / ack を流す検証用スクリプト(`tools/`)と、サーバーの中の偽の端末(`DEV_TOOLS=1`)【追加案】 |
 
 ---
 
@@ -140,45 +140,60 @@ flowchart LR
 |---|---|---|
 | Mosquitto 2.0 | Docker | 1883 |
 | MySQL 8.4 | Docker | **3307**(PC に別の MySQL が入っていても 3306 とぶつからないように) |
-| サーバーアプリ | 手元(`npm run dev`)。本番に近い形で試すときだけ Docker | — |
+| サーバーアプリ(管理画面と API) | 手元(`npm run dev`)。本番に近い形で試すときだけ Docker | 3000 |
 
 ### 6.1 はじめての人へ:手元に環境を作る
 
-1. **Node.js 24 を入れる**
-   - https://nodejs.org/ から「24」の LTS 版を入れる。nvm(nvm-windows)を使っている人は、このフォルダで `nvm install 24` → `nvm use 24`(`.nvmrc` に 24 と書いてある)
-   - 入ったか確かめる:`node -v` が `v24.` で始まればよい
-2. **Docker Desktop を入れて起動する**
-   - https://www.docker.com/products/docker-desktop/ から入れる。タスクバーのクジラのアイコンが動いていれば起動している
-   - 入ったか確かめる:`docker compose version` で版が出ればよい
-3. **リポジトリを手元に持ってくる**
+#### 前提:先に入れておくもの
+
+下の 3 つが入っていて、確かめるコマンドが通る状態から始める。
+
+| 入れるもの | 入れ方 | 確かめるコマンド |
+|---|---|---|
+| Git | https://git-scm.com/ から入れる | `git --version` で版が出る |
+| Node.js 24 | https://nodejs.org/ から「24」の LTS 版を入れる。nvm(nvm-windows)を使っている人は `nvm install 24` → `nvm use 24`(`.nvmrc` に 24 と書いてある) | `node -v` が `v24.` で始まる |
+| Docker Desktop | https://www.docker.com/products/docker-desktop/ から入れる(Windows は途中で WSL2 を入れるよう言われたら従い、PC を再起動する) | `docker compose version` で版が出る |
+
+- **入れたあとは VS Code(ターミナル)を完全に閉じて開き直す**。開いたままだと、古い PATH のままで `docker : 用語 'docker' は…認識されません` や `node` が見つからないと出る。ウィンドウが複数あれば全部閉じる。直らなければ PC を再起動する
+- **Docker Desktop は起動しておく**。タスクバーのクジラのアイコンが動いていて、Docker Desktop の左下が「Engine running」(緑)なら起動している。起動していないと `error during connect` と出る
+- PowerShell で `npm` を打って「スクリプトの実行が無効」と出たら、一度だけ `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` を打つ
+
+#### 手順
+
+1. **リポジトリを手元に持ってくる**
    ```powershell
    git clone https://github.com/yuki20060410/Re-Ray_Server.git
    cd Re-Ray_Server
    ```
-4. **依存パッケージを入れる**
+2. **依存パッケージを入れる**
    ```powershell
    npm ci
    ```
    - `npm ci` は `package-lock.json` のとおりに入れるので、**全員が同じバージョン**になる。`npm install` だとバージョンがずれることがある
-   - Node が 24 より古いと、ここでエラーになる(`.npmrc` の `engine-strict`)。手順 1 に戻る
-5. **接続情報のファイルを作る**
+   - Node が 24 より古いと、ここでエラーになる(`.npmrc` の `engine-strict`)。前提の Node.js 24 を入れ直す
+3. **接続情報のファイルを作る**
    ```powershell
-   Copy-Item .env.example .env
+   Copy-Item .env.example .env    # Mac・Linux は cp .env.example .env
    ```
    - `.env` を開き、`DB_PASS` と `DB_ROOT_PASS` に**自分で決めたパスワード**を入れる(空のままだと次の手順で止まる)。`.env` は git に入らない。**パスワードを `.env.example` に書かない**
-6. **Docker で Mosquitto と MySQL を起動する**
+4. **Docker で Mosquitto と MySQL を起動する**
    ```powershell
    npm run docker:up
    docker compose ps     # mosquitto と mysql が Up、mysql が (healthy) になれば OK
    ```
    - はじめての起動では、イメージのダウンロードに数分かかる
-7. **動くか確かめる**
+5. **動くか確かめる**
    ```powershell
    npm run typecheck   # 何も出なければ OK
    npm run dev         # 「Re-Ray_Server: 起動しました」と出れば OK(Ctrl+C で止める)
    ```
+   - ブラウザで http://localhost:3000 を開くと管理画面が出る
+   - 保存先は `.env` の `STORAGE`(`mysql` = Docker の MySQL、`memory` = メモリ版で再起動すると消える)
 
 **DB を空に戻したいとき**:`docker compose down -v`(**DB のデータが全部消える**)→ `npm run docker:up`。`db/init/` の表の定義が流れ直す。
+2026-11-06 より前に MySQL を起動したことがある人は、表がまだ無いので、一度これをやる(`db/init/` の .sql は、はじめての起動でしか流れない)。
+
+**画面を見るための見本を入れるとき**:`Get-Content db/demo/demo_data.sql | docker compose exec -T mysql mysql -ureray -p reray`(端末 5 台、信号、送信の記録。本番の DB には入れない)
 
 **パッケージを足すとき**:`npm install パッケージ名` で入れ、変わった `package.json` と `package-lock.json` を**両方**コミットする。ほかの人は pull したあと `npm ci` をやり直す。
 
@@ -209,6 +224,15 @@ npm run typecheck
 # テスト(src の *.test.ts を全部流す。Docker は要らない)
 npm test
 
+# 保存の窓口の約束のテストを、Docker の MySQL で流す(reray_test という別の DB を毎回作り直す。開発用の DB は触らない)
+npm run test:mysql
+
+# 負荷の試験(サーバーを起動したまま。偽の端末 100 台が同時に送り、欠け・重複が無いかを API で数える)
+npm run load-test
+
+# 管理画面だけを偽のサーバーで開く(http://localhost:8080。サーバーも Docker も要らない)
+npm run web:mock
+
 # 疑似端末ツール(実機なしで端末の代わりに流す。使い方の全部は tools/fake-device.ts の先頭)
 npm run fake -- signal --id dev-001 --code 6 --pos 3 --n 20   # 定型信号を送り、「本部に届いた」を待つ
 npm run fake -- signal --id dev-001 --seq 42 --repeat 2       # 同じ seq を 2 回(重複の確かめ)
@@ -216,9 +240,12 @@ npm run fake -- status --id dev-001 --battery 80 --glass true
 npm run fake -- will   --id dev-001                           # 遺言を登録して、黙って切れる
 npm run fake -- raw    --topic reray/v1/up/dev-009/signal --payload "{"   # 壊れた JSON
 npm run fake -- listen --id dev-001                           # 下りを表示し続ける
+npm run fake -- listen --id dev-001 --ack 4                   # 届いた text に ack を返す(3 受け取った / 4 了解 / 5 できない)
 ```
 
-**M1 を手で確かめる**:`docker compose up -d mosquitto`(MySQL はまだ要らない)→ `npm run dev` → 別のターミナルで `npm run fake -- signal`。サーバーの画面に `reray/v1/up/dev-001/signal → accepted` と出て、疑似端末に「本部に届いた: 1 件すべて」と出れば OK。保存は今はメモリ版なので、サーバーを止めると中身は消える。
+**M1 を手で確かめる**:`docker compose up -d mosquitto` → `npm run dev` → 別のターミナルで `npm run fake -- signal`。サーバーの画面に `reray/v1/up/dev-001/signal → accepted` と出て、疑似端末に「本部に届いた: 1 件すべて」と出れば OK。
+
+**M2・M3 を画面で確かめる**:`.env` を `DEV_TOOLS=1` にして `npm run dev` → http://localhost:3000。サーバーの中で偽の端末(`DEV_FAKES`、既定は dev-001〜003)がつながり、30 秒ごとに状態を送り、届いた文字・指示に返事をする。端末一覧の下の「テスト用」の欄から、信号を送る・黙って切る(遺言)・Wi-Fi/LoRa を切り替える ができる。**検証用。本物の端末だけで試すときは `DEV_TOOLS=0`**。
 
 ## 7. フォルダ構成
 
@@ -242,7 +269,8 @@ Re-Ray_Server/
 ├── config/
 │   └── mosquitto.conf     検証用のブローカー設定(Docker の Mosquitto が読む)
 ├── db/
-│   └── init/              MySQL のはじめての起動時に流す .sql(表の定義を置く予定)
+│   ├── init/              MySQL のはじめての起動時に流す .sql(01 表 = B 案、02 一覧表、03 サーバーの追加。db/init/README.md)
+│   └── demo/              画面を見るための見本(自動では流れない)
 ├── package.json           npm のスクリプトと依存パッケージ
 ├── package-lock.json      依存パッケージの正確なバージョン(全員そろえるため、必ずコミット)
 ├── tsconfig.json          TypeScript の設定
@@ -251,16 +279,19 @@ Re-Ray_Server/
 ├── .env.example           接続情報のひな形(コピーして .env を作る)
 ├── src/                   サーバーアプリ(TypeScript。入口は src/index.ts)
 │   ├── protocol/          トピックと端末ID(topics.ts)、上りの JSON の検証(validate.ts)
-│   ├── server/            受信 1 件ごとの処理(receiver.ts)、pc の連番(pcSeq.ts)
+│   ├── server/            受信(receiver.ts)、送信(sender.ts)、「切れた」の判定(presence.ts)、pc の連番(pcSeq.ts)
+│   ├── http/              HTTP API と管理画面の配信(app.ts)、返す JSON の形(views.ts)
 │   ├── mqtt/              ブローカーへの接続と購読(保存が終わってから受け取りの返事を返す)
-│   └── storage/           保存の窓口(types.ts)と、その実装(今はメモリ版だけ)。約束のテストは contract.ts
+│   ├── storage/           保存の窓口(types.ts)と、その実装(memory.ts・mysql.ts)。約束のテストは contract.ts
+│   └── dev/               サーバーの中で動かす偽の端末(DEV_TOOLS=1 のときだけ)
+├── web/                   管理画面(やまさん作。素の HTML + JS。web/README.md)
 ├── dist/                  ビルド結果(git 管理外)
-├── tools/                 疑似端末ツール(fake-device.ts。npm run fake)、ログの解析スクリプト(TypeScript)
+├── tools/                 疑似端末ツール(fake-device.ts。npm run fake)、負荷の試験(load-test.ts)
 ├── data/                  作業用のデータ(git 管理外。DB 本体は Docker のボリューム)
 └── logs/                  サーバーのログ、実測ログ(git 管理外)
 ```
 
-管理PCの画面(web)は別パートのため、このリポジトリには作らない。
+管理PCの画面はやまさんのパート。2026-11-06 に `reray-app/admin` を `web/` に取り込み、このサーバーが配るようにした(画面とのやり取りは `web/js/api.js` の 1 か所)。
 
 ---
 
@@ -291,7 +322,7 @@ Re-Ray_Server/
 - LoRa の心拍(status の形)
 - 10/20 の決定で増えた項目:`pos`、指示コードの下り、本部に届いた、文字起こし、GPS(一覧は `docs/INTERFACES_2026-10-23.md` §8)
 - 10/23 にサーバー側で決めた項目:数量 `n`、方角 `dir`、出口の生渡し(`共通仕様/00_統合案_2026-10-23.md` の C-03・C-14・C-21)
-- DB の土台(時刻の時間帯・端末IDの型・ENUM):DB の担当の案と食い違っている(`docs/DB案の比較_2026-11-06.md`)。決まるまで `db/init/` の .sql は作らない
+- DB の土台(時刻の時間帯・端末IDの型・ENUM):DB の担当の案と食い違っている(`docs/DB案の比較_2026-11-06.md`)。2026-11-06 に、いったん **B 案(日本時間・数値の端末ID・ENUM)の表**で MySQL 版を作った。付け替えは `src/storage/mysql.ts` の中だけなので、決まったらそこと `db/init/` を直す。B 案に足してほしいもの(DB-016・DB-019 など)は `db/init/03_server.sql`
 
 > [!WARNING]
 > **共通仕様に入るまでは【案】として作り、名前は1か所(定数・型)にまとめておく。** ack の暫定の動きは `docs/INTERFACES_2026-10-23.md` §2.4。
@@ -320,4 +351,6 @@ Re-Ray_Server/
 | 2026-10-22 | 10/20 の決定(進め方・要件定義・機能一覧)を反映。ポジション・指示コード・文字起こし・本部に届いた・GPS を【案】で追加。修正案 #3・#4 を採用扱いに |
 | 2026-11-06 | M1(上りの最小経路):MQTT の購読、上りの検証、重複の判定と保存、「本部に届いた」の返信、疑似端末ツール(`npm run fake`)。保存はメモリ版。TEST_PLAN M1 に結果を記録 |
 | 2026-11-06 | HTTP フレームワークを Fastify、テストを `node:test` に決定。保存の窓口(`src/storage/`)とメモリ版、約束のテストを追加(`npm test`) |
+| 2026-11-06 | §6.1 を「前提(Git・Node.js 24・Docker Desktop を先に入れる)」と「手順」に分けた。入れたあと VS Code を開き直すこと、Docker Desktop の起動、Mac の `cp` を追記 |
 | 2026-11-06 | `GATEWAY_RAW_FORMAT` と `DB案の比較` を追加。`SIGNAL_FORMAT` をプロジェクトの版(方角 `dir`、定型信号の一覧)に合わせ、`dir`・出口の生渡し・統合案で決まった LoRa の下りを各文書に反映 |
+| 2026-11-09 | やまさんの `reray-app`(JavaScript のサーバー + 管理画面)を取り込み、`src/` に一本化した。M2・M3:HTTP API(Fastify)、送信と ack の対応づけ・集計、「切れた」の判定、MySQL 版の保存(B 案の表。`db/init/`)、管理画面(`web/`)、サーバーの中の偽の端末(`DEV_TOOLS`)、負荷の試験(`npm run load-test`)。B 案にあった 了解/できない・SOS の対応済み・LoRa 中で送らなかった印 を【案】で取り込んだ。重なっていた `reray-app/server`(内蔵ブローカー・Docker 構成など)は消した |

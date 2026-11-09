@@ -59,3 +59,25 @@ export function publisher(client: MqttClient) {
     await client.publishAsync(topic, payload, { qos: 1, retain: false });
   };
 }
+
+/** PUBACK を待つ上限(画面から送るとき。これを過ぎたら流せなかったことにする) */
+const PUBLISH_TIMEOUT_MS = 5000;
+
+/**
+ * 画面から送る用(Sender)。**ブローカーにつながっていなければ待たずに失敗する**(MQTT.js は切れている間の
+ * publish を溜めて待つので、そのままだと API が返事をしない)。2026-11-06 追加
+ */
+export function strictPublisher(client: MqttClient) {
+  return async (topic: string, payload: string): Promise<void> => {
+    if (!client.connected) throw new Error("not connected to broker");
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("PUBACK timeout")), PUBLISH_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([client.publishAsync(topic, payload, { qos: 1, retain: false }), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}

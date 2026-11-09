@@ -50,7 +50,14 @@ export interface AckMessage {
   /** 現行のたたき台の形 */
   ackSrc?: string;
   ackSeq?: number;
+  /**
+   * 【案】確認の種類(統合案 差分6。2026-11-06 に reray-app から取り込んだ)。
+   * 3 = 受け取った(省略時)、4 = 了解、5 = できない。1・2 は LoRa の中だけのもので MQTT には出ない
+   */
+  ackKind: AckKind;
 }
+
+export type AckKind = 3 | 4 | 5;
 
 /** 出口の生渡し。中身の分解は lora の処理で行う */
 export interface GatewayFrame {
@@ -143,7 +150,9 @@ function parseBody(
       return { ok: true, message };
     }
     case "ack": {
-      const message: AckMessage = { type: "ack", src, seq, ts };
+      const ackKind = body.ack_kind === undefined ? 3 : body.ack_kind;
+      if (ackKind !== 3 && ackKind !== 4 && ackKind !== 5) return bad("ack_kind");
+      const message: AckMessage = { type: "ack", src, seq, ts, ackKind };
       if (body.ack_mid !== undefined) {
         if (!isInt(body.ack_mid, 1, Number.MAX_SAFE_INTEGER)) return bad("ack_mid");
         message.ackMid = body.ack_mid;

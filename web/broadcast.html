@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>一斉送信 | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main>
+    <h1>一斉送信</h1>
+    <section class="card">
+      <h2>全員に送る</h2>
+      <div id="send"></div>
+    </section>
+
+    <section class="card">
+      <h2>最近送ったもの</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>時刻</th><th>種類</th><th>だれへ</th><th>中身</th><th>届いた数</th></tr></thead>
+          <tbody id="sent"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('broadcast.html');
+
+    async function refresh() {
+      const list = await Api.getMessages({ limit: 10 });
+      $('#sent').innerHTML = list.length ? list.map(m => `<tr>
+          <td>${fmtDateTime(m.sent_at)}</td>
+          <td><span class="tag kind">${kindLabel(m.kind)}</span></td>
+          <td>${m.dst_device_id == null ? '全員' : `<a href="device.html?id=${m.dst_device_id}">${esc(m.dst_name)}</a>`}</td>
+          <td>${esc(m.text)}</td>
+          <td>${deliveryText(m.delivery, m.requires_response)}</td>
+        </tr>`).join('')
+        : '<tr><td colspan="5" class="empty">まだ送っていません</td></tr>';
+    }
+
+    guard(() => mountSendForm($('#send'), { deviceId: null, onSent: refresh }));
+    poll(refresh);
+  </script>
+</body>
+</html>
