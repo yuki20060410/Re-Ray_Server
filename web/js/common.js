@@ -77,6 +77,11 @@ function fmtDelay(ms) {
   const m = Math.round(ms / 60000);
   return m < 60 ? `${m}分` : `${Math.floor(m / 60)}時間${m % 60 ? `${m % 60}分` : ''}`;
 }
+// SOS の帯に添える「・8分遅れて届いた」。遅れていなければ空
+function delayNote(s) {
+  const ms = delayMs(s);
+  return ms > DELAY_MARK_MS ? `・${fmtDelay(ms)}遅れて届いた` : '';
+}
 // 記録の行に添える小さな文。遅れたとき・端末の時計が合っていないときだけ
 function signalTimeNote(s) {
   if (s.device_ts === null) return '端末の時刻なし（受けた時刻だけ）';
@@ -110,14 +115,16 @@ function logRowHtml(x) {
     const handled = sos && x.handled_at
       ? `<span class="tag done">対応済み ${fmtTime(x.handled_at)}</span>`
       : sos ? `<button class="btn small danger" data-handle="${x.id}">対応済みにする</button>` : '';
+    const extra = signalExtra(x);
+    const timeNote = signalTimeNote(x);
     return `<tr class="${sos && !x.handled_at ? 'row-sos' : ''}">
       <td class="time">${fmtDateTime(x.at)}</td>
       <td>${sos ? '<span class="tag sos">SOS</span>' : '<span class="tag">定型信号</span>'}</td>
       <td><a href="device.html?id=${x.device_id}">${esc(x.owner_name || deviceLabel(x.device_id))}</a></td>
       <td>本部</td>
-      <td><strong>${esc(x.code)}: ${esc(x.name)}</strong>${signalExtra(x) ? ` ${esc(signalExtra(x))}` : ''}
+      <td><strong>${esc(x.code)}: ${esc(x.name)}</strong>${extra ? ` ${esc(extra)}` : ''}
           ${x.position ? `<span class="muted">（${esc(x.position.name)}）</span>` : ''} ${handled}
-          ${signalTimeNote(x) ? `<span class="line-sub">${esc(signalTimeNote(x))}</span>` : ''}</td>
+          ${timeNote ? `<span class="line-sub">${esc(timeNote)}</span>` : ''}</td>
       <td>${viaHtml(x.via)}</td>
     </tr>`;
   }
@@ -277,7 +284,7 @@ async function refreshSos() {
       <span class="sos-label">SOS</span>
       <span class="who">${esc(s.owner_name || deviceLabel(s.device_id))}</span>
       <span>${esc(s.position ? s.position.name : '場所なし')}</span>
-      <span class="meta">${fmtTime(s.received_at)}・${fmtAgo(s.received_at)}・${viaLabel(s.via)}${delayMs(s) > DELAY_MARK_MS ? `・${fmtDelay(delayMs(s))}遅れて届いた` : ''}</span>
+      <span class="meta">${fmtTime(s.received_at)}・${fmtAgo(s.received_at)}・${viaLabel(s.via)}${delayNote(s)}</span>
       <span class="spacer"></span>
       <a class="btn" href="device.html?id=${s.device_id}">詳細</a>
       <button class="btn primary" data-handle="${s.id}">対応済みにする</button>
