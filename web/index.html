@@ -8,25 +8,28 @@
 </head>
 <body>
   <main>
-    <h1>端末一覧</h1>
+    <div class="page-head">
+      <h1>端末一覧</h1>
+      <p>SOS の端末 → 切れた端末 → それ以外 の順に並びます。行を押すと詳細を開きます。</p>
+    </div>
     <div class="summary" id="summary"></div>
 
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th></th><th>名前</th><th>端末</th><th>ポジション</th><th>つながり</th>
+            <th>名前</th><th>ポジション</th><th>つながり</th>
             <th>経路</th><th>電池</th><th>グラス</th><th>最後の連絡</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="9" class="empty">読み込み中…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="7" class="empty">読み込み中…</td></tr></tbody>
       </table>
     </div>
-    <p class="muted">SOS の端末 → 切れた端末 → それ以外 の順に並びます。2秒ごとに自動で更新します。行を押すと詳細を開きます。</p>
 
     <!-- 偽のサーバーのときだけ出す -->
-    <section class="card test-panel" id="test-panel" hidden>
-      <h2>テスト用（端末ができるまでの仮の操作）</h2>
+    <details class="card test-panel" id="test-panel" hidden>
+      <summary>テスト用（端末ができるまでの仮の操作）</summary>
+      <div class="body">
       <div class="row">
         <select id="t-device"></select>
         <select id="t-code"></select>
@@ -38,7 +41,8 @@
         <button class="btn" id="t-via">選んだ端末の経路を Wi-Fi / LoRa で切り替える</button>
         <button class="btn danger" id="t-reset">データを最初に戻す</button>
       </div>
-    </section>
+      </div>
+    </details>
   </main>
 
   <script src="js/api.js"></script>
@@ -60,17 +64,14 @@
       const cls = ['clickable', sos ? 'row-sos' : '', !d.is_online ? 'row-off' : ''].join(' ');
       const last = d.last_signal;
       return `<tr class="${cls}" data-id="${d.id}">
-        <td>${sos ? '<span class="tag sos">SOS</span>' : ''}</td>
-        <td><strong>${esc(ownerOf(d))}</strong></td>
-        <td class="muted">${deviceLabel(d.id)}</td>
-        <td>${esc(d.position ? `${d.position.id}: ${d.position.name}` : '—')}</td>
-        <td><span class="dot ${d.is_online ? 'on' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}
-            ${!d.is_online && d.last_seen_at ? `<div class="muted" style="font-size:12px">${fmtAgo(d.last_seen_at)}から</div>` : ''}</td>
-        <td>${d.via ? `<span class="tag ${d.via}">${viaLabel(d.via)}</span>` : '—'}</td>
+        <td style="white-space:nowrap"><strong>${esc(ownerOf(d))}</strong><span class="sub">${deviceLabel(d.id)}</span></td>
+        <td>${d.position ? esc(d.position.name) : '<span class="muted">—</span>'}</td>
+        <td>${onlineHtml(d)}${!d.is_online && d.last_seen_at ? `<span class="sub">${fmtAgo(d.last_seen_at)}から</span>` : ''}</td>
+        <td>${viaHtml(d.via)}</td>
         <td>${batteryHtml(d.battery)}</td>
-        <td>${d.has_glass ? 'つながっている' : '<span class="muted">なし</span>'}</td>
-        <td>${last ? `${last.is_sos ? '<span class="tag sos">SOS</span>' : esc(signalLabel(last))}
-            <div class="muted" style="font-size:12px">${fmtTime(last.received_at)}（${fmtAgo(last.received_at)}）</div>` : '<span class="muted">まだない</span>'}</td>
+        <td>${d.has_glass ? 'あり' : '<span class="muted">なし</span>'}</td>
+        <td style="white-space:nowrap">${last ? `<span class="${last.is_sos ? 'text-sos' : ''}">${last.is_sos ? 'SOS' : esc(signalLabel(last))}</span>
+            <span class="sub num">${fmtTime(last.received_at)}・${fmtAgo(last.received_at)}</span>` : '<span class="muted">まだない</span>'}</td>
       </tr>`;
     }
 
@@ -79,13 +80,14 @@
       devices.sort((a, b) => rank(a) - rank(b) || a.id - b.id);
       const on = devices.filter(d => d.is_online).length;
       const sos = devices.filter(d => d.open_sos.length).length;
-      $('#summary').innerHTML = `
-        <div class="stat"><span class="muted">全部</span><b>${devices.length}台</b></div>
-        <div class="stat"><span class="muted">つながっている</span><b>${on}台</b></div>
-        <div class="stat off"><span class="muted">切れた</span><b>${devices.length - on}台</b></div>
-        <div class="stat sos"><span class="muted">SOS（未対応）</span><b>${sos}台</b></div>`;
+      const stat = (cls, label, n) => `<div class="stat ${cls}">${label}<b>${n}</b></div>`;
+      $('#summary').innerHTML =
+        stat('', '全部', devices.length) +
+        stat('', 'つながっている', on) +
+        stat('', '切れた', devices.length - on) +
+        stat(sos ? 'alert' : '', 'SOS 未対応', sos);
       $('#rows').innerHTML = devices.length ? devices.map(row).join('')
-        : '<tr><td colspan="9" class="empty">端末がまだありません</td></tr>';
+        : '<tr><td colspan="7" class="empty">端末がまだありません</td></tr>';
     }
 
     $('#rows').addEventListener('click', (e) => {

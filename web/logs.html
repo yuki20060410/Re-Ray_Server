@@ -8,8 +8,11 @@
 </head>
 <body>
   <main>
-    <h1>記録</h1>
-    <div class="filters">
+    <div class="page-head">
+      <h1>記録</h1>
+      <p>届いた定型信号と、本部から送ったものを新しい順に並べます。記録は消えません。</p>
+    </div>
+    <div class="filters toolbar">
       <label>端末
         <select id="f-device"><option value="">すべて</option></select>
       </label>
@@ -25,7 +28,7 @@
         <input type="date" id="f-date">
       </label>
       <button class="btn" id="f-clear">しぼり込みを外す</button>
-      <span class="muted" id="count"></span>
+      <span class="count" id="count"></span>
     </div>
 
     <div class="table-wrap">
