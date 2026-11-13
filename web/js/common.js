@@ -40,10 +40,48 @@ function fmtAgo(iso) {
 }
 const viaLabel = (v) => ({ wifi: 'Wi-Fi', lora: 'LoRa', offline: '切れている' }[v] || '—');
 
+// ---- 定型信号の数量・方角・時刻（2026-11-13 追加。決まりは docs/SIGNAL_FORMAT §2） ----
+const DIRECTIONS = ['', '北', '北東', '東', '南東', '南', '南西', '西', '北西'];
+const isQuantityInRange = (n) => Number.isInteger(n) && n >= 5 && n <= 100 && n % 5 === 0;
+
+// 数量 n は区分の上限（n = 10 は「6〜10人」）。区分外の値は届いた値のまま出す
+function quantityText(s) {
+  if (s.quantity == null) return '';
+  const unit = s.quantity_unit || '';
+  return isQuantityInRange(s.quantity) ? `${s.quantity - 4}〜${s.quantity}${unit}` : `${s.quantity}${unit}`;
+}
+// 方角 dir は 1〜8（北から時計回り）。範囲外の値はそのまま出す
+function directionText(s) {
+  if (s.direction == null) return '';
+  return DIRECTIONS[s.direction] ? `${DIRECTIONS[s.direction]}へ` : `方角 ${s.direction}`;
+}
+// 「北東へ 6〜10人」。範囲外なら「（範囲外）」を付ける
+function signalExtra(s) {
+  const parts = [directionText(s), quantityText(s)].filter(Boolean).join(' ');
+  return parts + (s.out_of_range ? '（範囲外）' : '');
+}
+
 function signalLabel(s) {
   if (!s) return '—';
-  const q = s.quantity ? ` ${s.quantity}${s.quantity_unit || ''}` : '';
-  return `${s.short_name}${q}`;
+  const extra = signalExtra(s);
+  return `${s.short_name}${extra ? ` ${extra}` : ''}`;
+}
+
+// 端末で押してから 1 分より遅れて届いたら「遅れて届いた」と出す（LoRa の中継や、出口が切れていた間の分）
+const DELAY_MARK_MS = 60 * 1000;
+function delayMs(s) {
+  if (!s.device_ts || !s.received_at) return 0;
+  return Date.parse(s.received_at) - Date.parse(s.device_ts);
+}
+function fmtDelay(ms) {
+  const m = Math.round(ms / 60000);
+  return m < 60 ? `${m}分` : `${Math.floor(m / 60)}時間${m % 60 ? `${m % 60}分` : ''}`;
+}
+// 記録の行に添える小さな文。遅れたとき・端末の時計が合っていないときだけ
+function signalTimeNote(s) {
+  if (s.device_ts === null) return '端末の時刻なし（受けた時刻だけ）';
+  const ms = delayMs(s);
+  return ms > DELAY_MARK_MS ? `押したのは ${fmtDateTime(s.device_ts)}（${fmtDelay(ms)}遅れて届いた）` : '';
 }
 
 function batteryHtml(b) {
@@ -58,6 +96,7 @@ function deliveryText(d, withResponse = true) {
   if (d.waiting) parts.push(`届く待ち ${d.waiting}台`);
   if (d.lora) parts.push(`LoRa中 ${d.lora}台`);
   if (d.offline) parts.push(`切れている ${d.offline}台`);
+  if (d.late) parts.push(`つながってから届いた ${d.late}台`);
   if (d.skipped) parts.push(`文字は送れない（LoRa中）${d.skipped}台`);
   return `${d.total}台中${d.received}台に届いた` + (parts.length ? `（${parts.join('、')}）` : '');
 }
@@ -76,8 +115,9 @@ function logRowHtml(x) {
       <td>${sos ? '<span class="tag sos">SOS</span>' : '<span class="tag">定型信号</span>'}</td>
       <td><a href="device.html?id=${x.device_id}">${esc(x.owner_name || deviceLabel(x.device_id))}</a></td>
       <td>本部</td>
-      <td><strong>${esc(x.code)}: ${esc(x.name)}</strong>${x.quantity ? ` ${x.quantity}${esc(x.quantity_unit || '')}` : ''}
-          ${x.position ? `<span class="muted">（${esc(x.position.name)}）</span>` : ''} ${handled}</td>
+      <td><strong>${esc(x.code)}: ${esc(x.name)}</strong>${signalExtra(x) ? ` ${esc(signalExtra(x))}` : ''}
+          ${x.position ? `<span class="muted">（${esc(x.position.name)}）</span>` : ''} ${handled}
+          ${signalTimeNote(x) ? `<span class="line-sub">${esc(signalTimeNote(x))}</span>` : ''}</td>
       <td>${viaHtml(x.via)}</td>
     </tr>`;
   }
@@ -237,7 +277,7 @@ async function refreshSos() {
       <span class="sos-label">SOS</span>
       <span class="who">${esc(s.owner_name || deviceLabel(s.device_id))}</span>
       <span>${esc(s.position ? s.position.name : '場所なし')}</span>
-      <span class="meta">${fmtTime(s.received_at)}・${fmtAgo(s.received_at)}・${viaLabel(s.via)}</span>
+      <span class="meta">${fmtTime(s.received_at)}・${fmtAgo(s.received_at)}・${viaLabel(s.via)}${delayMs(s) > DELAY_MARK_MS ? `・${fmtDelay(delayMs(s))}遅れて届いた` : ''}</span>
       <span class="spacer"></span>
       <a class="btn" href="device.html?id=${s.device_id}">詳細</a>
       <button class="btn primary" data-handle="${s.id}">対応済みにする</button>

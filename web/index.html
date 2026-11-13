@@ -79,7 +79,8 @@
       const devices = await Api.getDevices();
       devices.sort((a, b) => rank(a) - rank(b) || a.id - b.id);
       const on = devices.filter(d => d.is_online).length;
-      const sos = devices.filter(d => d.open_sos.length).length;
+      // SOS の帯は 1 件ずつ出るので、件数も端末の数ではなく SOS の件数で数える（2026-11-13）
+      const sos = devices.reduce((n, d) => n + d.open_sos.length, 0);
       const stat = (cls, label, n) => `<div class="stat ${cls}">${label}<b>${n}</b></div>`;
       $('#summary').innerHTML =
         stat('', '全部', devices.length) +
