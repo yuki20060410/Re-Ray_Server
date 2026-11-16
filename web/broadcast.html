@@ -8,7 +8,10 @@
 </head>
 <body>
   <main>
-    <h1>一斉送信</h1>
+    <div class="page-head">
+      <h1>一斉送信</h1>
+      <p>つながっている全員のグラスに、同じ文字か指示を出します。</p>
+    </div>
     <section class="card">
       <h2>全員に送る</h2>
       <div id="send"></div>
@@ -35,11 +38,11 @@
     async function refresh() {
       const list = await Api.getMessages({ limit: 10 });
       $('#sent').innerHTML = list.length ? list.map(m => `<tr>
-          <td>${fmtDateTime(m.sent_at)}</td>
-          <td><span class="tag kind">${kindLabel(m.kind)}</span></td>
-          <td>${m.dst_device_id == null ? '全員' : `<a href="device.html?id=${m.dst_device_id}">${esc(m.dst_name)}</a>`}</td>
+          <td class="time">${fmtDateTime(m.sent_at)}</td>
+          <td><span class="tag">${kindLabel(m.kind)}</span></td>
+          <td>${m.dst_device_id == null ? '<strong>全員</strong>' : `<a href="device.html?id=${m.dst_device_id}">${esc(m.dst_name)}</a>`}</td>
           <td>${esc(m.text)}</td>
-          <td>${deliveryText(m.delivery, m.requires_response)}</td>
+          <td class="muted">${deliveryText(m.delivery, m.requires_response)}</td>
         </tr>`).join('')
         : '<tr><td colspan="5" class="empty">まだ送っていません</td></tr>';
     }

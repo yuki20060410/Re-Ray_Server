@@ -61,6 +61,8 @@ const Wire = (() => {
       code: s.code, name: c.name, short_name: c.short_name, is_sos: s.is_sos, priority: c.priority,
       quantity: s.n, quantity_unit: c.quantity_unit, position: pos(s.position),
       via: s.via, received_at: s.at, handled_at: s.handled_at,
+      // 2026-11-13 追加: 方角、範囲外の印、端末で押した時刻（null = 端末の時計が合っていない）
+      direction: s.dir, out_of_range: s.out_of_range, device_ts: s.device_ts,
     };
   }
 
@@ -84,7 +86,11 @@ const Wire = (() => {
       sent_at: m.sent_at,
       delivery: {
         total: s.total, received: s.acked, accepted: s.accepted, declined: s.declined,
-        waiting: s.waiting, lora: s.lora, offline: s.offline, skipped: s.skipped,
+        waiting: s.waiting, lora: s.lora, skipped: s.skipped,
+        // サーバーの summary.offline は「送った時に切れていた数」。つながってから届いた分（offline.acked）を分けて、
+        // 「5台中5台に届いた（…切れている 1台）」と食い違って見えないようにする（2026-11-13）
+        offline: s.offline - (m.offline?.acked ?? 0),
+        late: m.offline?.acked ?? 0,
       },
       requires_response: m.requires_response,
     };

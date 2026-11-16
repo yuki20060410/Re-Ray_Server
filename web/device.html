@@ -8,8 +8,14 @@
 </head>
 <body>
   <main>
-    <p><a href="index.html">← 端末一覧へ</a></p>
-    <h1 id="title">端末の詳細</h1>
+    <a class="back" href="index.html">← 端末一覧</a>
+    <div class="device-head">
+      <span id="avatar"></span>
+      <div>
+        <h1 id="title">端末の詳細</h1>
+        <div class="chips" id="chips"></div>
+      </div>
+    </div>
 
     <div class="grid-2">
       <section class="card">
@@ -45,19 +51,25 @@
 
     async function refresh() {
       const [d, logs] = await Promise.all([Api.getDevice(id), Api.getLogs({ device_id: id })]);
-      $('#title').textContent = `${ownerOf(d)}（${deviceLabel(d.id)}）`;
+      $('#title').textContent = ownerOf(d);
+      $('#avatar').innerHTML = avatarHtml(d);
+      $('#chips').innerHTML = `${d.open_sos.length ? '<span class="tag sos">SOS</span>' : ''}
+        <span class="tag">${deviceLabel(d.id)}</span>
+        <span class="tag"><span class="dot ${d.is_online ? '' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}</span>
+        ${d.via ? `<span class="tag">${viaLabel(d.via)}</span>` : ''}`;
       $('#sos').innerHTML = d.open_sos.map(s => `
         <div class="sos-box">
-          <strong>SOS</strong> ${fmtTime(s.received_at)}（${fmtAgo(s.received_at)}）
+          <strong>SOS</strong> <span class="num">${fmtTime(s.received_at)}（${fmtAgo(s.received_at)}）</span>
           ${s.position ? esc(s.position.name) : ''}
+          <span class="spacer"></span>
           <button class="btn small danger" data-handle="${s.id}">対応済みにする</button>
         </div>`).join('');
       $('#status').innerHTML = `
-        <dt>つながり</dt><dd><span class="dot ${d.is_online ? 'on' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}</dd>
-        <dt>経路</dt><dd>${d.via ? `<span class="tag ${d.via}">${viaLabel(d.via)}</span>` : '—'}</dd>
+        <dt>つながり</dt><dd>${onlineHtml(d)}</dd>
+        <dt>経路</dt><dd>${viaHtml(d.via)}</dd>
         <dt>ポジション</dt><dd>${esc(d.position ? `${d.position.id}: ${d.position.name}` : '—')}</dd>
         <dt>電池</dt><dd>${batteryHtml(d.battery)}</dd>
-        <dt>グラス</dt><dd>${d.has_glass ? 'つながっている' : 'なし'}</dd>
+        <dt>グラス</dt><dd>${d.has_glass ? 'つながっている' : '<span class="muted">なし</span>'}</dd>
         <dt>最後の連絡</dt><dd>${d.last_signal ? `${esc(signalLabel(d.last_signal))}（${fmtTime(d.last_signal.received_at)}）` : 'まだない'}</dd>
         <dt>最後に見えた</dt><dd>${d.last_seen_at ? `${fmtTime(d.last_seen_at)}（${fmtAgo(d.last_seen_at)}）` : '—'}</dd>`;
       $('#logs').innerHTML = logs.length ? logs.map(logRowHtml).join('')
