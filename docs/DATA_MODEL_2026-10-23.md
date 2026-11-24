@@ -94,7 +94,7 @@ erDiagram
 | `received_at` | DATETIME(3) | サーバーが受け取った時刻。**こちらを正にする**。LoRa 由来(`up/gw/{出口ID}/lora`)は「受信時刻 − `age_ms`」をサーバーが渡す(`GATEWAY_RAW_FORMAT_2026-10-23.md` §1) |
 
 - 【修正案】`(device_id, seq)` に**一意制約は付けない**(seq は 65535 の次に 0 に戻り、同じ組が正当に再び出るため)。代わりに `(device_id, seq, received_at)` に索引を付ける。
-- 重複の判定は DB の制約ではなく**サーバーのコード**で行う:直近10分に同じ `device_id` と `seq` があれば捨てる【案】(`ARCHITECTURE_2026-10-23.md` §6)。
+- 重複の判定は DB の制約ではなく**サーバーのコード**で行う:同じ `device_id` と `seq` が 10 分以内、または端末の送り直し(同じ `device_ts`)が 24 時間以内にあれば捨てる【案】(`ARCHITECTURE_2026-10-23.md` §6。2026-11-24 見直し)。
 
 ### 3.4 acks(届いた確認)
 

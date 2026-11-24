@@ -4,14 +4,13 @@
 // 1. events に原本を書く → 2. 確かめる(だめなら invalid)→ 3. 重複の判定と保存 →
 // 4. signal なら、重複で捨てた場合も含めて「本部に届いた」を返す
 // 2026-11-06: ack の対応づけ(M3)と、了解・できない(ack_kind 4・5)、範囲外の印を足した
+// 2026-11-24: 重複の判定を見直した(端末の送り直しを 24 時間まで重複とみなす。storage/dedup.ts)
 
 import { downAckTopic } from "../protocol/topics.js";
 import { MAX_PAYLOAD_BYTES, parseUp, type AckMessage, type SignalMessage, type UpMessage } from "../protocol/validate.js";
+import { DEDUP_RULE } from "../storage/dedup.js";
 import type { AckResponse, EventResult, Storage } from "../storage/types.js";
 import type { PcSeq } from "./pcSeq.js";
-
-/** 重複とみなす範囲(直近 10 分の同じ src + seq。ARCHITECTURE §6) */
-export const DEDUP_WINDOW_MS = 10 * 60 * 1000;
 
 /** ack_seq だけの ack を対応づけるとき、さかのぼる範囲(INTERFACES §2.4 の暫定) */
 export const ACK_SEQ_WINDOW_MS = 10 * 60 * 1000;
@@ -90,7 +89,8 @@ export class Receiver {
             receivedAt,
             outOfRange: isOutOfRange(message),
           },
-          DEDUP_WINDOW_MS,
+          // 重複の決まり(10 分以内、または端末の送り直しは 24 時間まで)は storage/dedup.ts
+          DEDUP_RULE,
         );
         // 重複で捨てた signal にも返す(端末が送り直しをやめられるように。INTERFACES §2.6)
         this.sendHqAck(message.src, message.seq);

@@ -6,9 +6,13 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import type { DedupRule } from "./dedup.js";
 import type { NewMessage, NewSignal, NewVoiceClip, Storage } from "./types.js";
 
 const TEN_MIN = 10 * 60 * 1000;
+const DAY = 24 * 60 * 60 * 1000;
+/** サーバーと同じ重複の決まり(10 分以内、または送り直しは 24 時間まで) */
+const RULE: DedupRule = { windowMs: TEN_MIN, resendWindowMs: DAY };
 const T0 = Date.parse("2026-11-06T00:00:00.000Z");
 
 /** T0 から sec 秒後 */
@@ -39,7 +43,7 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
     describe("定型信号", () => {
       it("保存すると、登録前の端末が registered = false で作られる", async () => {
         const s = await make();
-        const r = await s.recordSignal(signal(), TEN_MIN);
+        const r = await s.recordSignal(signal(), RULE);
         assert.equal(r.kind, "saved");
 
         const d = await s.getDevice("dev-001");
@@ -55,8 +59,8 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
 
       it("数量 n と方角 dir をそのまま残す。無い項目は無いまま", async () => {
         const s = await make();
-        await s.recordSignal(signal({ seq: 1, n: 10, dir: 2 }), TEN_MIN);
-        await s.recordSignal(signal({ seq: 2, n: undefined, receivedAt: at(1) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 1, n: 10, dir: 2 }), RULE);
+        await s.recordSignal(signal({ seq: 2, n: undefined, receivedAt: at(1) }), RULE);
 
         const last = await s.getLastSignal("dev-001");
         assert.ok(last);
@@ -70,7 +74,7 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
         const ts = new Date(1791849600 * 1000);
         const r = await s.recordSignal(
           signal({ seq: 9, code: 9, pos: 4, n: 7, dir: 12, via: "lora", deviceTs: ts, outOfRange: true }),
-          TEN_MIN,
+          RULE,
         );
         assert.equal(r.kind, "saved");
         const got = r.kind === "saved" ? await s.getSignal(r.signal.id) : null;
@@ -85,30 +89,30 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
 
       it("経路の分からない signal も保存できる(via = null)", async () => {
         const s = await make();
-        const r = await s.recordSignal(signal({ via: null }), TEN_MIN);
+        const r = await s.recordSignal(signal({ via: null }), RULE);
         assert.equal(r.kind, "saved");
         assert.equal((await s.getLastSignal("dev-001"))?.via, null);
       });
 
       it("ポジションや定型信号の一覧に無い番号でも保存する(INTERFACES §2.5)", async () => {
         const s = await make();
-        const r = await s.recordSignal(signal({ code: 31, pos: 250 }), TEN_MIN);
+        const r = await s.recordSignal(signal({ code: 31, pos: 250 }), RULE);
         assert.equal(r.kind, "saved");
         assert.equal((await s.getDevice("dev-001"))?.pos, 250);
       });
 
       it("pos = 0(場所なし)の signal が最新なら、端末の今のポジションは null", async () => {
         const s = await make();
-        await s.recordSignal(signal({ seq: 1, pos: 3 }), TEN_MIN);
-        await s.recordSignal(signal({ seq: 2, pos: 0, receivedAt: at(1) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 1, pos: 3 }), RULE);
+        await s.recordSignal(signal({ seq: 2, pos: 0, receivedAt: at(1) }), RULE);
         assert.equal((await s.getDevice("dev-001"))?.pos, null);
         assert.equal((await s.getLastSignal("dev-001"))?.pos, 0);
       });
 
       it("10 分以内の同じ端末・同じ seq は重複。先に届いた方が残る", async () => {
         const s = await make();
-        await s.recordSignal(signal({ via: "wifi" }), TEN_MIN);
-        const r = await s.recordSignal(signal({ via: "lora", receivedAt: at(5) }), TEN_MIN);
+        await s.recordSignal(signal({ via: "wifi" }), RULE);
+        const r = await s.recordSignal(signal({ via: "lora", receivedAt: at(5) }), RULE);
         assert.equal(r.kind, "duplicate");
 
         const d = await s.getDevice("dev-001");
@@ -116,26 +120,57 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
         assert.deepEqual(d?.lastSeenAt, at(0));
       });
 
-      it("同じ seq でも、10 分を過ぎていれば別の signal(seq の一周)", async () => {
+      // ---- 2026-11-24 の見直し(dedup.ts): 端末の送り直しを 24 時間まで重複とみなす ----
+
+      it("端末の時刻(ts)が同じなら、10 分を過ぎた送り直しも重複(SOS が 2 件にならない)", async () => {
         const s = await make();
-        await s.recordSignal(signal(), TEN_MIN);
-        const r = await s.recordSignal(signal({ receivedAt: at(601) }), TEN_MIN);
+        const ts = new Date(T0 - 5000);
+        await s.recordSignal(signal({ code: 1, deviceTs: ts }), RULE);
+        const r = await s.recordSignal(signal({ code: 1, deviceTs: ts, receivedAt: at(30 * 60) }), RULE);
+        assert.equal(r.kind, "duplicate");
+        assert.equal((await s.listSignals({ limit: 10 })).length, 1);
+      });
+
+      it("同じ seq でも ts が違えば別の signal(再起動で、たまたま前と同じ seq になった)", async () => {
+        const s = await make();
+        await s.recordSignal(signal({ deviceTs: new Date(T0 - 5000) }), RULE);
+        const r = await s.recordSignal(signal({ deviceTs: new Date(T0 + 60_000), receivedAt: at(61) }), RULE);
         assert.equal(r.kind, "saved");
+      });
+
+      it("ts が無い端末: 10 分を過ぎても、中身が同じなら送り直し。中身が違えば別の signal", async () => {
+        const s = await make();
+        await s.recordSignal(signal({ code: 6, n: 20 }), RULE);
+        assert.equal((await s.recordSignal(signal({ code: 6, n: 20, receivedAt: at(30 * 60) }), RULE)).kind, "duplicate");
+        assert.equal((await s.recordSignal(signal({ code: 6, n: 25, receivedAt: at(31 * 60) }), RULE)).kind, "saved");
+      });
+
+      it("片方にだけ ts がある(Wi-Fi は時刻あり、LoRa は GPS 未同期など)ときは、10 分以内なら重複", async () => {
+        const s = await make();
+        await s.recordSignal(signal({ deviceTs: new Date(T0) }), RULE);
+        assert.equal((await s.recordSignal(signal({ deviceTs: null, code: 2, receivedAt: at(5) }), RULE)).kind, "duplicate");
+      });
+
+      it("24 時間を過ぎたら、同じ seq・同じ ts・同じ中身でも別の signal", async () => {
+        const s = await make();
+        const ts = new Date(T0);
+        await s.recordSignal(signal({ deviceTs: ts }), RULE);
+        assert.equal((await s.recordSignal(signal({ deviceTs: ts, receivedAt: at(DAY / 1000 + 1) }), RULE)).kind, "saved");
       });
 
       it("別の端末の同じ seq は重複ではない", async () => {
         const s = await make();
-        await s.recordSignal(signal(), TEN_MIN);
-        const r = await s.recordSignal(signal({ deviceId: "dev-002" }), TEN_MIN);
+        await s.recordSignal(signal(), RULE);
+        const r = await s.recordSignal(signal({ deviceId: "dev-002" }), RULE);
         assert.equal(r.kind, "saved");
       });
 
       it("同時に届いても 1 件だけ保存する(登録前の端末でも)", async () => {
         const s = await make();
         const rs = await Promise.all([
-          s.recordSignal(signal({ via: "wifi" }), TEN_MIN),
-          s.recordSignal(signal({ via: "lora" }), TEN_MIN),
-          s.recordSignal(signal({ via: "lora" }), TEN_MIN),
+          s.recordSignal(signal({ via: "wifi" }), RULE),
+          s.recordSignal(signal({ via: "lora" }), RULE),
+          s.recordSignal(signal({ via: "lora" }), RULE),
         ]);
         assert.equal(rs.filter((r) => r.kind === "saved").length, 1);
         assert.equal(rs.filter((r) => r.kind === "duplicate").length, 2);
@@ -143,9 +178,9 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
 
       it("古い signal が後から届いても、端末の今の値と最新の signal は巻き戻さない", async () => {
         const s = await make();
-        await s.recordSignal(signal({ seq: 50, pos: 7, via: "wifi", receivedAt: at(100) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 50, pos: 7, via: "wifi", receivedAt: at(100) }), RULE);
         // 出口に溜まっていた分(受信時刻 = サーバーの受信時刻 − age_ms で、前の時刻になる)
-        await s.recordSignal(signal({ seq: 40, pos: 1, via: "lora", receivedAt: at(30) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 40, pos: 1, via: "lora", receivedAt: at(30) }), RULE);
 
         const d = await s.getDevice("dev-001");
         assert.equal(d?.pos, 7);
@@ -156,17 +191,17 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
 
       it("切れた端末に古い signal が後から届いても、つながったことにはしない", async () => {
         const s = await make();
-        await s.recordSignal(signal({ seq: 50, receivedAt: at(100) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 50, receivedAt: at(100) }), RULE);
         await s.markOffline("dev-001", "lastwill", at(110));
-        await s.recordSignal(signal({ seq: 40, via: "lora", receivedAt: at(30) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 40, via: "lora", receivedAt: at(30) }), RULE);
         assert.equal((await s.getDevice("dev-001"))?.online, false);
       });
 
       it("signal の無い端末の最新は null。まとめて引くと、signal のある端末だけ入る", async () => {
         const s = await make();
         assert.equal(await s.getLastSignal("dev-009"), null);
-        await s.recordSignal(signal({ seq: 1 }), TEN_MIN);
-        await s.recordSignal(signal({ seq: 2, receivedAt: at(1) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 1 }), RULE);
+        await s.recordSignal(signal({ seq: 2, receivedAt: at(1) }), RULE);
         await s.touchDevice("dev-002", at(0));
         const m = await s.getLastSignals(["dev-001", "dev-002", "dev-009"]);
         assert.deepEqual([...m.keys()], ["dev-001"]);
@@ -183,9 +218,9 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
 
     describe("記録の検索と、SOS の対応済み", () => {
       async function three(s: Storage) {
-        await s.recordSignal(signal({ seq: 1, code: 1, receivedAt: at(0) }), TEN_MIN);
-        await s.recordSignal(signal({ seq: 2, code: 6, receivedAt: at(60) }), TEN_MIN);
-        await s.recordSignal(signal({ deviceId: "dev-002", seq: 3, code: 1, receivedAt: at(120) }), TEN_MIN);
+        await s.recordSignal(signal({ seq: 1, code: 1, receivedAt: at(0) }), RULE);
+        await s.recordSignal(signal({ seq: 2, code: 6, receivedAt: at(60) }), RULE);
+        await s.recordSignal(signal({ deviceId: "dev-002", seq: 3, code: 1, receivedAt: at(120) }), RULE);
       }
 
       it("新しい順。端末・番号・期間・件数でしぼれる", async () => {
@@ -328,7 +363,7 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
       it("記録に使われたポジションも消せる。過去の記録の番号は残る", async () => {
         const s = await make();
         await s.createPosition({ no: 210, name: "臨時", place: null, lat: null, lon: null }, at(0));
-        await s.recordSignal(signal({ pos: 210 }), TEN_MIN);
+        await s.recordSignal(signal({ pos: 210 }), RULE);
         await s.createMessage(message({ kind: "order", icode: 1, pos: 210, body: "臨時へ移動してください" }), []);
         assert.equal(await s.deletePosition(210), true);
         assert.equal((await s.getLastSignal("dev-001"))?.pos, 210);

@@ -5,6 +5,7 @@
 // 2026-11-06: 一覧表・SOS の対応済み・了解/できない・記録の検索を足した(types.ts の変更に合わせた)
 
 import { compareDeviceId } from "../protocol/topics.js";
+import { type DedupRule, isSameSignal } from "./dedup.js";
 import { SEED_INSTRUCTION_CODES, SEED_POSITIONS, SEED_SIGNAL_CODES } from "./seed.js";
 import type {
   AckResponse,
@@ -95,15 +96,9 @@ export class MemoryStorage implements Storage {
 
   // ---- 定型信号 ----
 
-  async recordSignal(signal: NewSignal, windowMs: number): Promise<RecordSignalResult> {
+  async recordSignal(signal: NewSignal, rule: DedupRule): Promise<RecordSignalResult> {
     const t = signal.receivedAt.getTime();
-    const duplicate = this.signals.some(
-      (s) =>
-        s.deviceId === signal.deviceId &&
-        s.seq === signal.seq &&
-        Math.abs(s.receivedAt.getTime() - t) <= windowMs,
-    );
-    if (duplicate) return { kind: "duplicate" };
+    if (this.signals.some((s) => isSameSignal(s, signal, rule))) return { kind: "duplicate" };
 
     // 端末の「今の値」は、受信時刻がいちばん新しい signal で決める。
     // 出口に溜まっていた古い signal が後から届いても、今の値を巻き戻さない

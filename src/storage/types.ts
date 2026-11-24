@@ -16,6 +16,8 @@
 //   記録の検索、「切れた」の理由
 // 2026-11-24: チャンネル(端末からの依頼 #1〜3)と、文の ch・from、音声(#4)を足した
 
+import type { DedupRule } from "./dedup.js";
+
 export type DeviceId = string;
 export type Via = "wifi" | "lora";
 
@@ -301,11 +303,11 @@ export interface Storage {
   // 定型信号
   /**
    * 重複でなければ signal を保存し、端末の行も更新する(無ければ registered = false で作る)。
-   * 重複 = 同じ端末・同じ seq の signal が、受信時刻の前後 windowMs 以内にある。
+   * 重複かどうかは dedup.ts の isSameSignal(rule)で決める(2026-11-24 見直し。端末の送り直しを 24 時間まで重複とみなす)。
    * **判定と保存は一続きにする**(Wi-Fi と LoRa から同時に届いても 1 件にする。DB-007・DB-017)。
    * 先に届いた方を残し、後から届いた方は何も変えない。
    */
-  recordSignal(signal: NewSignal, windowMs: number): Promise<RecordSignalResult>;
+  recordSignal(signal: NewSignal, rule: DedupRule): Promise<RecordSignalResult>;
   /** 端末の最新の signal(受信時刻がいちばん新しいもの) */
   getLastSignal(deviceId: DeviceId): Promise<Signal | null>;
   /** 何台ぶんかの最新の signal をまとめて(端末一覧用)。signal の無い端末は入らない */

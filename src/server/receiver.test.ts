@@ -83,6 +83,18 @@ describe("受信(signal)", () => {
     assert.deepEqual(published.map((p) => p.body.seq), [9, 10]);
   });
 
+  it("30 分後の送り直し(同じ seq・同じ ts の SOS)も重複。1 件のまま、「本部に届いた」は返す(2026-11-24)", async () => {
+    const { storage, receiver, published, advance } = setup();
+    await receiver.handle(...signal({ code: 1 }));
+    advance(30 * 60); // 「本部に届いた」が届かず、端末がつながり直してから送り直した
+    const out = await receiver.handle(...signal({ code: 1 }));
+    await receiver.drain();
+
+    assert.equal(out.result, "duplicate");
+    assert.equal(storage.signals.length, 1);
+    assert.deepEqual(published.map((p) => p.body.ack_seq), [42, 42]);
+  });
+
   it("不正なものは invalid で原本だけ残し、「本部に届いた」は返さない", async () => {
     const { storage, receiver, published } = setup();
     const out = await receiver.handle("reray/v1/up/dev-001/signal", Buffer.from("{"));

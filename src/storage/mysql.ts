@@ -13,6 +13,7 @@
 
 import mysql, { type Pool, type PoolConnection, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
 import { deviceNumber, formatDeviceId } from "../protocol/topics.js";
+import { type DedupRule, isSameSignal } from "./dedup.js";
 import type {
   AckResponse,
   Channel,
@@ -115,7 +116,7 @@ export class MysqlStorage implements Storage {
 
   // ---- 定型信号 ----
 
-  async recordSignal(signal: NewSignal, windowMs: number): Promise<RecordSignalResult> {
+  async recordSignal(signal: NewSignal, rule: DedupRule): Promise<RecordSignalResult> {
     const no = toNo(signal.deviceId);
     const t = signal.receivedAt.getTime();
     return this.tx(async (c) => {
@@ -128,12 +129,13 @@ export class MysqlStorage implements Storage {
           WHERE d.id = ? FOR UPDATE OF d`,
         [no],
       );
-      const dup = await rows(
+      // 同じ端末・同じ seq の候補(送り直しを見る長さの分)を取り、同じ信号かは dedup.ts で決める
+      const candidates = await rows<SignalRow>(
         c,
-        "SELECT id FROM signals WHERE device_id = ? AND seq = ? AND received_at BETWEEN ? AND ? LIMIT 1",
-        [no, signal.seq, new Date(t - windowMs), new Date(t + windowMs)],
+        "SELECT * FROM signals WHERE device_id = ? AND seq = ? AND received_at BETWEEN ? AND ?",
+        [no, signal.seq, new Date(t - rule.resendWindowMs), new Date(t + rule.resendWindowMs)],
       );
-      if (dup.length) return { kind: "duplicate" } as const;
+      if (candidates.some((r) => isSameSignal(toSignal(r), signal, rule))) return { kind: "duplicate" } as const;
 
       const ins = await exec(
         c,
