@@ -75,6 +75,21 @@ describe("送信", () => {
     assert.deepEqual((await storage.getDeliveries(m.id)).map((d) => [d.viaAtSend, d.skipped]), [["lora", false]]);
   });
 
+  it("指示には requires_response(了解・できない を求めるか)が付く。自由な文には付かない(2026-11-24)", async () => {
+    const { storage, sender, published } = await setup();
+    await storage.createInstructionCode({
+      code: 50, name: "連絡", usesPosition: false, textWithPos: null, textWithoutPos: "本部に連絡してください",
+      requiresResponse: false, strength: null,
+    });
+    await sender.send({ dst: "all", kind: "order", icode: 3, pos: 0 }); // 一覧の仮の中身は、求める
+    await sender.send({ dst: "all", kind: "order", icode: 50, pos: 0 });
+    await sender.send({ dst: "all", kind: "free", body: "x" });
+    assert.deepEqual(
+      published.map((p) => p.body.requires_response),
+      [true, false, undefined],
+    );
+  });
+
   it("ポジションを使わない指示は pos = 0。表に無いポジションは番号のまま文にする", async () => {
     const { sender, published } = await setup();
     await sender.send({ dst: "all", kind: "order", icode: 3, pos: 9 });

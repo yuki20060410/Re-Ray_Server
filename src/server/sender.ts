@@ -88,7 +88,7 @@ export class Sender {
     const dst = await this.checkDst(req.dst);
     const content =
       req.kind === "free"
-        ? { body: checkBody(req.body, req.source === "transcript" ? TRANSCRIPT_MAX : BODY_MAX), pos: 0 }
+        ? { body: checkBody(req.body, req.source === "transcript" ? TRANSCRIPT_MAX : BODY_MAX), pos: 0, requiresResponse: undefined }
         : await this.orderContent(req.icode, req.pos);
     const devices = dst === "all" ? await this.storage.listDevices() : [await this.storage.getDevice(dst)];
     const ch = dst !== "all" && this.channels ? (await this.channels.ensureDirect(dst)).ch : undefined;
@@ -107,6 +107,7 @@ export class Sender {
       devices.filter((d): d is Device => d !== null),
       // 1 台あて・一斉は、今までどおり 1 回だけ流す
       [dst],
+      content.requiresResponse,
     );
   }
 
@@ -140,7 +141,13 @@ export class Sender {
    * 宛先と送った時の経路を決め、**DB に保存して id(= mid)を得てから**流す。
    * dsts(流す先)が 2 つ以上(チャンネル)なら、1 台ずつ流す。1 つでも流せなければ failed で 503
    */
-  private async saveAndPublish(m: NewMessage, devices: Device[], dsts: (DeviceId | "all")[]): Promise<Message> {
+  private async saveAndPublish(
+    m: NewMessage,
+    devices: Device[],
+    dsts: (DeviceId | "all")[],
+    /** 指示コードの形のとき、了解・できない を求めるか(指示コード表の requires_response) */
+    requiresResponse?: boolean,
+  ): Promise<Message> {
     // 宛先と、送った時の経路(あとで端末の状態が変わっても、当時の分母が残る。INTERFACES §4.1)
     const targets: MessageTarget[] = devices.map((d) => {
       const viaAtSend: ViaAtSend = d.online ? (d.via ?? "wifi") : "offline";
@@ -161,6 +168,8 @@ export class Sender {
         mid: saved.id,
         ts: Math.floor(saved.sentAt.getTime() / 1000),
         ...(saved.icode !== undefined && { icode: saved.icode, pos: saved.pos ?? 0 }),
+        // 【案】了解・できない を求めるか(端末からの依頼 11/20 #1。指示コードの形のときだけ付く)
+        ...(requiresResponse !== undefined && { requires_response: requiresResponse }),
         // 【案】どのチャンネルの文か、だれが言ったか(端末からの依頼 §4.2)
         ...(saved.ch !== undefined && { ch: saved.ch }),
         from: saved.from ?? "pc",
@@ -196,12 +205,16 @@ export class Sender {
   }
 
   /** 指示コードの形: 指示コード表とポジション表から文を作る */
-  private async orderContent(icode: number, pos: number): Promise<{ body: string; pos: number }> {
+  private async orderContent(
+    icode: number,
+    pos: number,
+  ): Promise<{ body: string; pos: number; requiresResponse: boolean }> {
     const code = Number.isInteger(icode)
       ? (await this.storage.listInstructionCodes()).find((c) => c.code === icode)
       : undefined;
     if (!code) throw new SendError(422, "unknown_icode", "指示コードが一覧にありません");
-    if (!code.usesPosition) return { body: checkBody(code.textWithoutPos ?? code.name), pos: 0 };
+    const requiresResponse = code.requiresResponse;
+    if (!code.usesPosition) return { body: checkBody(code.textWithoutPos ?? code.name), pos: 0, requiresResponse };
 
     // ポジションは表に無くても送れる(番号のまま。INTERFACES §4.1)
     if (!Number.isInteger(pos) || pos < 1 || pos > 255) {
@@ -209,7 +222,7 @@ export class Sender {
     }
     const p = (await this.storage.listPositions()).find((x) => x.no === pos);
     const text = (code.textWithPos ?? "{ポジション名}").replace("{ポジション名}", p?.name ?? `ポジション${pos}`);
-    return { body: checkBody(text), pos };
+    return { body: checkBody(text), pos, requiresResponse };
   }
 }
 
