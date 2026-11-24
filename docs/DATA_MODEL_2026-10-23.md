@@ -1,6 +1,6 @@
 # DATA_MODEL — データモデルと集計規則
 
-> 更新: 2026-10-23 / 状態: **ドラフト**(10/20 の決定で positions / instruction_codes / transcripts を【案】で追加。2026-11-06 に signals へ `dir` を追加)
+> 更新: 2026-10-23 / 状態: **ドラフト**(10/20 の決定で positions / instruction_codes / transcripts を【案】で追加。2026-11-06 に signals へ `dir` を追加。2026-11-24 にサーバーが足した表を §8 に追加)
 > DB の担当(すみださん)の `2026-10-23_テーブル定義_案.md` とは、土台(端末IDの型・時刻の時間帯・ENUM)が違う。比べた結果と DB 修正依頼の案は `DB案の比較_2026-11-06.md`。決まるまで、この文書は直さずに置く。
 > チームのテーブル案(`サーバーサイド/02_テーブル定義`:devices / messages / signals / acks の4表)を**正**とし、仕様修正案(10/16)の変更と、サーバー側だけの追加を重ねる。表記は `../README.md` §3。
 > DB は **MySQL に決定**(2026-10-22)。型は MySQL の書き方(MySQL 8.0 以上、InnoDB、文字コード `utf8mb4`)。
@@ -207,3 +207,61 @@ erDiagram
 
 - ログをいつまで残すかは未決(チーム)。検証の期間中は削除しない。
 - DB は MySQL。検証版は Docker の MySQL 8.4(`compose.yaml`)、本番の置き場所は未決。データは Docker のボリューム `mysql-data` に残る。接続情報は `.env` に書き、git に入れない。実測のデータは CSV に出して `logs/` に、日付と条件が分かるファイル名で保存する(例 `logs/2026-10-20_m5_text-10x.csv`)。
+
+## 8. 2026-11-24 にサーバーが足した表【案】(`db/init/03_server.sql`)
+
+いま動いている表は B 案(`db/init/01_schema.sql`)+ `03_server.sql` で、この文書の §3〜§4(A 案)とは列の名前が違う(`DB案の比較_2026-11-06.md`)。ここには、端末からの依頼(11/17・11/20)に応えるために **2026-11-24 に `03_server.sql` へ足したもの**を書く。DB の担当(すみださん)への修正依頼の案でもある(`DB案の比較_2026-11-06.md` §6 の DB-019〜023)。
+
+```mermaid
+erDiagram
+  devices ||--o| channels : "1 対 1(direct_device_id)"
+  channels ||--o{ channel_members : "入っている端末"
+  devices ||--o{ channel_members : ""
+  devices ||--o{ voice_clips : "話した"
+  channels |o--o{ voice_clips : "宛先(番号のまま。外部キーなし)"
+  voice_clips |o--o| messages : "文字にして配った 1 通"
+```
+
+### 8.1 channels・channel_members(チャンネル)
+
+| 列 | 型 | 中身 |
+|---|---|---|
+| `channels.id` | SMALLINT UNSIGNED PK AUTO_INCREMENT | 端末とやり取りする `ch` |
+| `channels.kind` | ENUM('direct','group') | 1 対 1(本部とその端末。サーバーが作る)/ グループ(管理画面で作る) |
+| `channels.name` | VARCHAR(30) | 名前(サーバーのコードで 8 文字までに抑える。グラスの都合) |
+| `channels.direct_device_id` | SMALLINT UNSIGNED UNIQUE、空可 | 1 対 1 のときの端末(1 台に 1 つ)。グループは空 |
+| `channels.created_at` | DATETIME(3) | 作った時刻 |
+| `channel_members.channel_id`・`device_id` | 主キー | 入っている端末。チャンネルを消すと一緒に消える(ON DELETE CASCADE) |
+
+- 1 台が入れるのは 8 個まで(1 対 1 を含む)。サーバーのコードで確かめる(端末の都合)。
+- `messages.channel_id` は外部キーにしない(チャンネルを消しても、送った記録の番号は残す。ポジションと同じ考え)。
+
+### 8.2 server_settings(1 つだけの値)
+
+| 列 | 型 | 中身 |
+|---|---|---|
+| `name` | VARCHAR(32) PK | 今は `config_rev` だけ |
+| `value` | BIGINT | 端末に配る設定の版。max(前の版 + 1, 今の UNIX 秒)。DB を作り直しても、前に配った版より小さくならない |
+
+### 8.3 voice_clips(音声)
+
+| 列 | 型 | 中身 |
+|---|---|---|
+| `id` | BIGINT UNSIGNED PK AUTO_INCREMENT | 端末に 202 で返す `id`。音のファイルは `VOICE_DIR/{id}.wav` |
+| `device_id` | SMALLINT UNSIGNED(devices.id) | 話した端末 |
+| `channel_id` | SMALLINT UNSIGNED | 宛先のチャンネル |
+| `seq` | SMALLINT UNSIGNED | 端末の番号。10 分以内の同じ端末・同じ番号は送り直し |
+| `duration_ms`・`bytes` | INT UNSIGNED | 長さと大きさ |
+| `status` | ENUM('queued','done','empty','failed') | 文字起こし待ち / 配った / 声が無かった / あきらめた |
+| `text` | TEXT、空可 | 文字にした文(配るときは 200 文字で切るが、ここには全文) |
+| `error`・`attempts` | VARCHAR(255)・TINYINT | 最後の失敗の理由と、試した回数(3 回まで) |
+| `message_id` | BIGINT UNSIGNED、空可 | 配った messages.id |
+| `received_at`・`done_at` | DATETIME(3) | 受けた時刻、終わった時刻 |
+
+### 8.4 列の追加
+
+| 表 | 列 | 中身 |
+|---|---|---|
+| `devices` | `mode` ENUM('normal','emergency') 空可 | 端末が status で最後に知らせたモード |
+| `messages` | `channel_id`・`from_device_id`(空可) | どのチャンネルの文か、だれが言ったか(空 = 本部) |
+| `messages` | `body` VARCHAR(40) → VARCHAR(255) | 声を文字にした文(200 文字まで)が入るように |
