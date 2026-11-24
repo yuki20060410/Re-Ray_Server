@@ -8,9 +8,11 @@
 </head>
 <body>
   <main>
-    <h1>ポジション（場所の番号）</h1>
-    <p class="muted">端末と指示では番号（1〜255）だけをやり取りします。ここで番号に名前を付けると、本部の画面とグラスの文に名前が出ます。
-      回線が切れている端末には、つながるまで新しい名前は届きません。</p>
+    <div class="page-head">
+      <h1>ポジション（場所の番号）</h1>
+      <p>端末と指示では番号（1〜255）だけをやり取りします。ここで番号に名前を付けると、本部の画面とグラスの文に名前が出ます。
+        回線が切れている端末には、つながるまで新しい名前は届きません。</p>
+    </div>
 
     <section class="card">
       <h2>追加する</h2>
@@ -43,7 +45,7 @@
     async function refresh() {
       const list = await Api.getPositions();
       $('#rows').innerHTML = list.length ? list.map(p => `<tr data-id="${p.id}">
-          <td><strong>${p.id}</strong></td>
+          <td class="num"><strong>${p.id}</strong></td>
           <td><input type="text" name="name" value="${esc(p.name)}" maxlength="30"></td>
           <td><input type="text" name="note" value="${esc(p.note)}" maxlength="100"></td>
           <td><input type="text" name="lat" value="${esc(p.lat)}" style="width:110px"></td>
@@ -64,7 +66,7 @@
       const val = (n) => tr.querySelector(`[name=${n}]`).value;
       if (btn.dataset.act === 'save') {
         const ok = await guard(() => Api.savePosition({ id, name: val('name'), note: val('note'), lat: val('lat'), lon: val('lon') }));
-        if (ok) { btn.textContent = '保存しました'; setTimeout(refresh, 800); }
+        if (ok) flashSaved(btn, refresh);
       } else {
         if (!confirm(`ポジション ${id} を消しますか？`)) return;
         const ok = await guard(() => Api.deletePosition(id));

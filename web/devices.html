@@ -8,8 +8,10 @@
 </head>
 <body>
   <main>
-    <h1>端末の登録</h1>
-    <p class="muted">端末の番号と、持つ人の名前をひも付けます。名前のない端末は、一覧で「（未登録）」と出ます。</p>
+    <div class="page-head">
+      <h1>端末の登録</h1>
+      <p>端末の番号と、持つ人の名前をひも付けます。名前のない端末は、一覧で「（未登録）」と出ます。</p>
+    </div>
 
     <section class="card">
       <h2>追加する</h2>
@@ -41,7 +43,7 @@
       $('#rows').innerHTML = list.map(d => `<tr data-id="${d.id}">
           <td><strong>${deviceLabel(d.id)}</strong></td>
           <td><input type="text" name="owner_name" value="${esc(d.owner_name)}" maxlength="30" placeholder="（未登録）"></td>
-          <td><span class="dot ${d.is_online ? 'on' : 'off'}"></span>${d.is_online ? 'つながっている' : '切れた'}</td>
+          <td>${onlineHtml(d)}</td>
           <td><button class="btn small" data-act="save">名前を保存</button></td>
         </tr>`).join('');
     }
@@ -51,7 +53,7 @@
       if (!btn) return;
       const tr = btn.closest('tr');
       const ok = await guard(() => Api.updateDevice(tr.dataset.id, { owner_name: tr.querySelector('[name=owner_name]').value.trim() }));
-      if (ok) { btn.textContent = '保存しました'; setTimeout(refresh, 800); }
+      if (ok) flashSaved(btn, refresh);
     });
 
     $('#add').addEventListener('submit', async (e) => {
