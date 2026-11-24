@@ -5,13 +5,15 @@
 // 3. HTTP API と管理画面(web/)を配る(http://localhost:3000)
 // 4. DEV_TOOLS=1 なら、偽の端末をつなぎ、管理画面の「テスト用」の欄を使えるようにする
 // 2026-11-06: M2・M3(HTTP API、送信、切れた判定)と MySQL 版を足した(reray-app から取り込み)
+// 2026-11-24: チャンネル(ChannelService)を足した
 
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { FakeFleet } from "./dev/fakeFleet.js";
 import { buildApp } from "./http/app.js";
-import { connectMqtt, publisher, strictPublisher } from "./mqtt/connect.js";
+import { connectMqtt, publisher, retainedPublisher, strictPublisher } from "./mqtt/connect.js";
+import { ChannelService } from "./server/channels.js";
 import { PcSeq } from "./server/pcSeq.js";
 import { Presence } from "./server/presence.js";
 import { Receiver } from "./server/receiver.js";
@@ -42,7 +44,13 @@ const receiver = new Receiver({ storage, pcSeq, publish: (t, p) => publish(t, p)
 const client = connectMqtt(config, (topic, payload) => receiver.handle(topic, payload));
 publish = publisher(client);
 
-const sender = new Sender({ storage, pcSeq, publish: strictPublisher(client) });
+// 【案】チャンネル(2026-11-24)。ブローカーにつながるたびに、登録した全端末へ設定を配り直す
+const channels = new ChannelService({ storage, pcSeq, publishRetained: retainedPublisher(client) });
+client.on("connect", () => {
+  channels.publishAll().catch((err: unknown) => console.error("設定を配り直せなかった", err));
+});
+
+const sender = new Sender({ storage, pcSeq, publish: strictPublisher(client), channels });
 const presence = new Presence({ storage });
 presence.start();
 
@@ -56,6 +64,7 @@ const app = await buildApp({
   storageKind: config.storage,
   webDir,
   dev: fleet,
+  channels,
 });
 await app.listen({ port: config.httpPort, host: "0.0.0.0" });
 

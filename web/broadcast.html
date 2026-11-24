@@ -38,11 +38,11 @@
     async function refresh() {
       const list = await Api.getMessages({ limit: 10 });
       $('#sent').innerHTML = list.length ? list.map(m => `<tr>
-          <td class="time">${fmtDateTime(m.sent_at)}</td>
-          <td><span class="tag">${kindLabel(m.kind)}</span></td>
-          <td>${m.dst_device_id == null ? '<strong>全員</strong>' : `<a href="device.html?id=${m.dst_device_id}">${esc(m.dst_name)}</a>`}</td>
-          <td>${esc(m.text)}</td>
-          <td class="muted">${deliveryText(m.delivery, m.requires_response)}</td>
+          <td>${fmtDateTime(m.sent_at)}</td>
+          <td><span class="tag kind">${kindLabel(m.kind)}</span></td>
+          <td>${m.dst_device_id == null ? esc(m.dst_name) : `<a href="device.html?id=${m.dst_device_id}">${esc(m.dst_name)}</a>`}</td>
+          <td>${m.from_name ? `<small class="muted">${esc(m.from_name)}:</small> ` : ''}${esc(m.text)}</td>
+          <td>${deliveryText(m.delivery, m.requires_response)}</td>
         </tr>`).join('')
         : '<tr><td colspan="5" class="empty">まだ送っていません</td></tr>';
     }

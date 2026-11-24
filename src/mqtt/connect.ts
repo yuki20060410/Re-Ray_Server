@@ -67,7 +67,7 @@ const PUBLISH_TIMEOUT_MS = 5000;
  * 画面から送る用(Sender)。**ブローカーにつながっていなければ待たずに失敗する**(MQTT.js は切れている間の
  * publish を溜めて待つので、そのままだと API が返事をしない)。2026-11-06 追加
  */
-export function strictPublisher(client: MqttClient) {
+export function strictPublisher(client: MqttClient, retain = false) {
   return async (topic: string, payload: string): Promise<void> => {
     if (!client.connected) throw new Error("not connected to broker");
     let timer: NodeJS.Timeout | undefined;
@@ -75,9 +75,18 @@ export function strictPublisher(client: MqttClient) {
       timer = setTimeout(() => reject(new Error("PUBACK timeout")), PUBLISH_TIMEOUT_MS);
     });
     try {
-      await Promise.race([client.publishAsync(topic, payload, { qos: 1, retain: false }), timeout]);
+      await Promise.race([client.publishAsync(topic, payload, { qos: 1, retain }), timeout]);
     } finally {
       clearTimeout(timer);
     }
   };
+}
+
+/**
+ * 【案】端末に配る設定(down/{id}/config)用。**retain あり**(つないだ直後の端末にも届くように。
+ * ほかのトピックは retain を使わない。DATAFLOW §8.2 の例外)。つながっていなければ待たずに失敗する
+ * (つなぎ直したときに全端末へ配り直す)。2026-11-24 追加
+ */
+export function retainedPublisher(client: MqttClient) {
+  return strictPublisher(client, true);
 }

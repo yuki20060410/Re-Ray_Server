@@ -181,11 +181,12 @@ async function guard(fn) {
 
 // ---- メニュー ----
 const PAGES = [
-  ['index.html', '端末一覧', 'grid'],
-  ['broadcast.html', '一斉送信', 'send'],
-  ['logs.html', '記録', 'log'],
-  ['positions.html', 'ポジション', 'pin'],
-  ['devices.html', '端末の登録', 'device'],
+  ['index.html', '端末一覧'],
+  ['broadcast.html', '一斉送信'],
+  ['logs.html', '記録'],
+  ['channels.html', 'チャンネル'],
+  ['positions.html', 'ポジション'],
+  ['devices.html', '端末の登録'],
 ];
 
 function renderHeader(activeFile) {
