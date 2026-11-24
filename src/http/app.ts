@@ -192,20 +192,31 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const p = positionParam(req.body?.no, req.body ?? {});
     const saved = await storage.createPosition(p, now());
     if (!saved) invalid(`ポジション ${p.no} はもうあります`, "duplicate_position");
+    positionsChanged();
     return reply.status(201).send(positionView(saved!));
   });
 
   app.put<{ Params: { no: string }; Body: Record<string, unknown> }>("/api/positions/:no", async (req) => {
     const p = positionParam(req.params.no, req.body ?? {});
     const saved = await storage.updatePosition(p, now());
+    if (saved) positionsChanged();
     return saved ? positionView(saved) : notFound(`ポジション ${p.no} はありません`);
   });
 
   app.delete<{ Params: { no: string } }>("/api/positions/:no", async (req, reply) => {
     const no = intParam(req.params.no, 1, 255, "ポジションの番号は 1〜255 です");
     if (!(await storage.deletePosition(no))) notFound(`ポジション ${no} はありません`);
+    positionsChanged();
     return reply.status(204).send();
   });
+
+  /**
+   * 【案】ポジションを変えたら、端末に配る設定(config)にも反映する(端末からの依頼 11/17 #7。2026-11-24)。
+   * 全端末に配るので、終わるのを待たずに返事をする(配れなかった分は、つなぎ直したときに配り直す)
+   */
+  function positionsChanged(): void {
+    deps.channels?.positionsChanged().catch((err: unknown) => console.error("ポジションの変更を端末に配れなかった", err));
+  }
 
   // ---- 定型信号・指示コードの一覧【案】 ----
 

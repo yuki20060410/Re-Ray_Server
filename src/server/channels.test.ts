@@ -133,6 +133,35 @@ describe("チャンネル【案】", () => {
     await channels.updateGroup(groups[0]!.ch, "班1改", ["dev-001"]);
   });
 
+  it("設定にポジションの番号と名前が入る。変えたら版を上げて全端末に配り直す(2026-11-24)", async () => {
+    const { storage, channels, config } = await setup();
+    await channels.publishAll();
+    const before = lastConfig(config, "dev-003");
+    const seeds = await storage.listPositions();
+    assert.deepEqual(before?.positions, seeds.map((p) => ({ pos: p.no, name: p.name })));
+    assert.equal(before?.positions_more, undefined);
+
+    await storage.createPosition({ no: 200, name: "臨時の集合場所", place: null, lat: null, lon: null }, new Date(T0));
+    await channels.positionsChanged();
+    const after = lastConfig(config, "dev-003");
+    assert.ok((after?.rev as number) > (before?.rev as number));
+    assert.deepEqual((after?.positions as { pos: number }[]).at(-1), { pos: 200, name: "臨時の集合場所" });
+  });
+
+  it("ポジションが多すぎて 1,500 バイトを超えるときは、番号の大きい方を削って positions_more を付ける", async () => {
+    const { storage, channels, config } = await setup();
+    for (let no = 100; no < 160; no++) {
+      await storage.createPosition({ no, name: `とても長い名前のポジション${no}`, place: null, lat: null, lon: null }, new Date(T0));
+    }
+    await channels.publishAll();
+    const c = config.find((x) => x.topic === "reray/v1/down/dev-001/config");
+    assert.ok(c);
+    assert.ok(Buffer.byteLength(JSON.stringify(c.body)) <= 1500);
+    assert.equal(c.body.positions_more, true);
+    const nos = (c.body.positions as { pos: number }[]).map((p) => p.pos);
+    assert.deepEqual(nos, [...nos].sort((a, b) => a - b)); // 小さい番号から残る
+  });
+
   it("配れなくても止めない(原本に failed で残る)", async () => {
     const { storage, channels } = await setup({ failPublish: true });
     await channels.createGroup("北班", ["dev-001"]);
