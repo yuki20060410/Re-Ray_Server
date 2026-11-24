@@ -8,6 +8,7 @@ import { compareDeviceId } from "../protocol/topics.js";
 import { SEED_INSTRUCTION_CODES, SEED_POSITIONS, SEED_SIGNAL_CODES } from "./seed.js";
 import type {
   AckResponse,
+  Channel,
   Delivery,
   Device,
   DeviceId,
@@ -59,6 +60,9 @@ export class MemoryStorage implements Storage {
   private readonly positions = new Map<number, Position>();
   private readonly signalCodes = new Map<number, SignalCode>();
   private readonly instructionCodes = new Map<number, InstructionCode>();
+  private readonly channels = new Map<number, Channel>();
+  private nextCh = 1;
+  private configRev = 0;
 
   constructor(options: MemoryStorageOptions = {}) {
     if (options.seed ?? true) {
@@ -249,6 +253,56 @@ export class MemoryStorage implements Storage {
     return { ...code };
   }
 
+  // ---- チャンネル ----
+
+  async listChannels(): Promise<Channel[]> {
+    return [...this.channels.values()].sort((a, b) => a.ch - b.ch).map(copyChannel);
+  }
+
+  async getChannel(ch: number): Promise<Channel | null> {
+    const c = this.channels.get(ch);
+    return c ? copyChannel(c) : null;
+  }
+
+  async ensureDirectChannel(deviceId: DeviceId, name: string, at: Date): Promise<Channel> {
+    this.ensureDevice(deviceId, at);
+    const found = [...this.channels.values()].find((c) => c.kind === "direct" && c.members[0] === deviceId);
+    if (found) return copyChannel(found);
+    const c: Channel = { ch: this.nextCh++, kind: "direct", name, members: [deviceId], createdAt: at };
+    this.channels.set(c.ch, c);
+    return copyChannel(c);
+  }
+
+  async createGroupChannel(name: string, members: DeviceId[], at: Date): Promise<Channel> {
+    for (const id of members) this.ensureDevice(id, at);
+    const c: Channel = { ch: this.nextCh++, kind: "group", name, members: sortedIds(members), createdAt: at };
+    this.channels.set(c.ch, c);
+    return copyChannel(c);
+  }
+
+  async updateGroupChannel(ch: number, name: string, members: DeviceId[]): Promise<Channel | null> {
+    const c = this.channels.get(ch);
+    if (!c || c.kind !== "group") return null;
+    for (const id of members) this.ensureDevice(id, c.createdAt);
+    c.name = name;
+    c.members = sortedIds(members);
+    return copyChannel(c);
+  }
+
+  async deleteGroupChannel(ch: number): Promise<boolean> {
+    const c = this.channels.get(ch);
+    if (!c || c.kind !== "group") return false;
+    return this.channels.delete(ch);
+  }
+
+  async getConfigRev(): Promise<number> {
+    return this.configRev;
+  }
+
+  async bumpConfigRev(): Promise<number> {
+    return ++this.configRev;
+  }
+
   // ---- 本部から送ったもの ----
 
   async createMessage(message: NewMessage, targets: MessageTarget[]): Promise<Message> {
@@ -388,6 +442,15 @@ function latest(signals: Signal[]): Signal | undefined {
     (best, s) => (!best || s.receivedAt.getTime() >= best.receivedAt.getTime() ? s : best),
     undefined,
   );
+}
+
+function copyChannel(c: Channel): Channel {
+  return { ...c, members: [...c.members] };
+}
+
+/** 重なりを除いて、端末ID の番号の順に並べる */
+function sortedIds(ids: DeviceId[]): DeviceId[] {
+  return [...new Set(ids)].sort(compareDeviceId);
 }
 
 function inRange(t: Date, from?: Date, to?: Date): boolean {

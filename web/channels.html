@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>チャンネル | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 2026-11-24 追加【案】: 端末からの依頼 #1〜3。端末が見られるメッセージのグループを決める画面 -->
+  <main>
+    <h1>チャンネル</h1>
+    <p class="muted">端末が見られるメッセージのグループです。登録した端末には「本部」（本部との 1 対 1）が自動でできます。
+      ここではグループを作り、入る端末を選びます。変えると、入っている端末のグラスの一覧がすぐ変わります。
+      名前は 8 文字まで、1 台が入れるのは「本部」を含めて 8 個までです（グラスの都合）。</p>
+
+    <section class="card">
+      <h2>チャンネルに送る</h2>
+      <form id="send" class="filters" novalidate>
+        <label>チャンネル <select name="ch" id="send-ch"></select></label>
+        <label style="flex:1">本文 <input type="text" name="body" style="width:100%" placeholder="例: 北口に集合してください"></label>
+        <button class="btn primary" type="submit">送る</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>グループを作る</h2>
+      <form id="add" novalidate>
+        <div class="filters">
+          <label>名前 <input type="text" name="name" maxlength="8" placeholder="例: 北班" required></label>
+          <button class="btn primary" type="submit">作る</button>
+        </div>
+        <div class="members" data-ids=""></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>グループ</h2>
+      <div id="groups"></div>
+    </section>
+
+    <section class="card">
+      <h2>本部との 1 対 1</h2>
+      <p class="muted" id="directs"></p>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('channels.html');
+
+    let devices = [];
+
+    // 入る端末のチェックボックス（登録した端末だけ）
+    function membersHtml(selected) {
+      const regs = devices.filter(d => d.owner_name);
+      if (!regs.length) return '<p class="muted">登録した端末がありません（「端末の登録」から登録してください）</p>';
+      return regs.map(d => `<label style="margin-right:12px;white-space:nowrap">
+          <input type="checkbox" value="${d.id}" ${selected.includes(d.id) ? 'checked' : ''}>
+          ${esc(deviceLabel(d.id))} ${esc(d.owner_name)}</label>`).join('');
+    }
+    const checked = (root) => [...root.querySelectorAll('input[type=checkbox]:checked')].map(x => Number(x.value));
+
+    // 入力中に書き換わらないよう、この画面は自動更新しない（保存したときだけ読み直す）
+    async function refresh() {
+      if (isMock()) {
+        $('#groups').innerHTML = '<p class="muted">チャンネルは本物のサーバー（npm run dev）で開いたときだけ使えます。</p>';
+        return;
+      }
+      const [list, devs] = await Promise.all([Api.getChannels(), Api.getDevices()]);
+      devices = devs;
+      const groups = list.filter(c => c.kind === 'group');
+      const directs = list.filter(c => c.kind === 'direct');
+
+      $('#send-ch').innerHTML = list.map(c => `<option value="${c.ch}">${c.kind === 'direct'
+        ? `本部 ⇔ ${esc(deviceLabel(c.members[0]?.id))} ${esc(c.members[0]?.owner_name || '')}`
+        : `#${esc(c.name)}（${c.members.length}台）`}</option>`).join('');
+      $('#add .members').innerHTML = membersHtml([]);
+
+      $('#groups').innerHTML = groups.length ? groups.map(c => `<div class="channel" data-ch="${c.ch}" style="border-top:1px solid #ddd;padding:8px 0">
+          <div class="filters">
+            <label>番号 <strong>${c.ch}</strong></label>
+            <label>名前 <input type="text" name="name" value="${esc(c.name)}" maxlength="8"></label>
+            <button class="btn small" data-act="save">保存</button>
+            <button class="btn small danger" data-act="del">消す</button>
+          </div>
+          <div class="members">${membersHtml(c.members.map(m => m.id))}</div>
+        </div>`).join('')
+        : '<p class="empty">まだありません</p>';
+
+      $('#directs').textContent = directs.length
+        ? directs.map(c => `${deviceLabel(c.members[0]?.id)}（${c.members[0]?.owner_name || '未登録'}）= ${c.ch}`).join('、')
+        : 'まだありません（端末を登録するとできます）';
+    }
+
+    $('#groups').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-act]');
+      if (!btn) return;
+      const box = btn.closest('.channel');
+      const ch = Number(box.dataset.ch);
+      if (btn.dataset.act === 'save') {
+        const ok = await guard(() => Api.saveChannel({ ch, name: box.querySelector('[name=name]').value, member_ids: checked(box) }));
+        if (ok) { btn.textContent = '保存しました'; setTimeout(() => guard(refresh), 800); }
+      } else {
+        if (!confirm(`チャンネル ${ch} を消しますか？（送った記録は残ります）`)) return;
+        const ok = await guard(() => Api.deleteChannel(ch));
+        if (ok) guard(refresh);
+      }
+    });
+
+    $('#add').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const ok = await guard(() => Api.saveChannel({ name: f.elements['name'].value, member_ids: checked(f) }));
+      if (ok) { f.reset(); guard(refresh); }
+    });
+
+    $('#send').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const ok = await guard(() => Api.sendToChannel({ ch: f.elements['ch'].value, body: f.elements['body'].value }));
+      if (ok) f.elements['body'].value = '';
+    });
+
+    guard(refresh);
+  </script>
+</body>
+</html>

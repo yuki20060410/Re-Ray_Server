@@ -14,6 +14,7 @@
 // 2026-11-06: reray-app(B 案の表で作られた試作)から取り込むため、次を足した
 //   一覧表(ポジション・定型信号・指示コード)、SOS の対応済み、了解/できない、LoRa 中で送らなかった印、
 //   記録の検索、「切れた」の理由
+// 2026-11-24: チャンネル(端末からの依頼 #1〜3)と、文の ch・from を足した
 
 export type DeviceId = string;
 export type Via = "wifi" | "lora";
@@ -170,6 +171,21 @@ export interface InstructionCode {
   strength: "required" | "request" | "report" | null;
 }
 
+// ---- チャンネル【案】(端末からの依頼 2026-11-17 の #1〜3) ----
+
+/** direct = 本部とその端末の 1 対 1(端末ごとに 1 つ、サーバーが作る)。group = 管理画面で作るグループ */
+export type ChannelKind = "direct" | "group";
+
+export interface Channel {
+  /** チャンネルの番号(端末とやり取りする `ch`) */
+  ch: number;
+  kind: ChannelKind;
+  name: string;
+  /** 入っている端末(端末ID の番号の順)。direct は 1 台だけ */
+  members: DeviceId[];
+  createdAt: Date;
+}
+
 // ---- 本部から送ったもの(messages)と宛先(message_targets) ----
 
 export type MessageKind = "free" | "order";
@@ -179,7 +195,7 @@ export type PublishState = "sent" | "failed";
 export interface NewMessage {
   /** pc の連番(0〜65535) */
   seq: number;
-  /** 端末ID か "all" */
+  /** 端末ID か "all"。チャンネルの文(ch あり)では宛先は ch の中の端末なので、"all" を入れる */
   dst: DeviceId | "all";
   /** 端末に出す文。指示コードの形では、指示コード表とポジション表から作った文 */
   body: string;
@@ -188,6 +204,10 @@ export interface NewMessage {
   pos?: number;
   source: MessageSource;
   sentAt: Date;
+  /** 【案】どのチャンネルの文か。無ければチャンネルなし(一斉・今までの形) */
+  ch?: number;
+  /** 【案】だれが言ったか(声を文字にしたもの)。無ければ本部 */
+  from?: DeviceId;
 }
 
 export interface Message extends NewMessage {
@@ -294,6 +314,23 @@ export interface Storage {
   createInstructionCode(code: InstructionCode): Promise<InstructionCode | null>;
   /** 変える。無ければ null */
   updateInstructionCode(code: InstructionCode): Promise<InstructionCode | null>;
+
+  // チャンネル【案】
+  /** 番号の順 */
+  listChannels(): Promise<Channel[]>;
+  getChannel(ch: number): Promise<Channel | null>;
+  /** その端末の 1 対 1 のチャンネル。無ければ作る(端末の行も無ければ作る) */
+  ensureDirectChannel(deviceId: DeviceId, name: string, at: Date): Promise<Channel>;
+  /** グループを作る。入れる端末の行が無ければ作る */
+  createGroupChannel(name: string, members: DeviceId[], at: Date): Promise<Channel>;
+  /** グループの名前と、入っている端末を置き換える。無い・direct なら null */
+  updateGroupChannel(ch: number, name: string, members: DeviceId[]): Promise<Channel | null>;
+  /** グループを消す。過去の記録の ch は番号のまま残る。無い・direct なら false */
+  deleteGroupChannel(ch: number): Promise<boolean>;
+  /** 端末に配る設定の版。変えるたびに増やす(端末は前より新しいときだけ覚え直す) */
+  getConfigRev(): Promise<number>;
+  /** 版を 1 つ増やし、新しい版を返す */
+  bumpConfigRev(): Promise<number>;
 
   // 本部から送ったもの
   /** 送る前に呼ぶ。messages と宛先を一続きに書き、id(= mid)を返す。宛先の端末が無ければ作る */

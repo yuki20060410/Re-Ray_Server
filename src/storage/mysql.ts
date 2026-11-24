@@ -15,6 +15,8 @@ import mysql, { type Pool, type PoolConnection, type ResultSetHeader, type RowDa
 import { deviceNumber, formatDeviceId } from "../protocol/topics.js";
 import type {
   AckResponse,
+  Channel,
+  ChannelKind,
   Delivery,
   Device,
   DeviceId,
@@ -370,6 +372,89 @@ export class MysqlStorage implements Storage {
     return this.instructionCodeByNo(code.code);
   }
 
+  // ---- チャンネル【案】(03_server.sql の channels・channel_members・server_settings) ----
+
+  async listChannels(): Promise<Channel[]> {
+    return channelsWhere(this.pool, "", []);
+  }
+
+  async getChannel(ch: number): Promise<Channel | null> {
+    const [c] = await channelsWhere(this.pool, "WHERE id = ?", [ch]);
+    return c ?? null;
+  }
+
+  async ensureDirectChannel(deviceId: DeviceId, name: string, at: Date): Promise<Channel> {
+    const no = toNo(deviceId);
+    const ch = await this.tx(async (c) => {
+      // 端末の行に鍵をかけてから探す(同時に呼ばれても 1 つだけ作る)
+      await lockDevice(c, no, at);
+      const [found] = await rows<{ id: number }>(c, "SELECT id FROM channels WHERE direct_device_id = ?", [no]);
+      if (found) return found.id;
+      const ins = await exec(
+        c,
+        "INSERT INTO channels (kind, name, direct_device_id, created_at) VALUES ('direct', ?, ?, ?)",
+        [name, no, at],
+      );
+      await exec(c, "INSERT INTO channel_members (channel_id, device_id) VALUES (?, ?)", [ins.insertId, no]);
+      return ins.insertId;
+    });
+    const saved = await this.getChannel(ch);
+    if (!saved) throw new Error("作ったチャンネルが読めない");
+    return saved;
+  }
+
+  async createGroupChannel(name: string, members: DeviceId[], at: Date): Promise<Channel> {
+    const ch = await this.tx(async (c) => {
+      const nos = [...new Set(members.map(toNo))];
+      for (const no of nos) await ensureDevice(c, no, at);
+      const ins = await exec(c, "INSERT INTO channels (kind, name, created_at) VALUES ('group', ?, ?)", [name, at]);
+      await insertMembers(c, ins.insertId, nos);
+      return ins.insertId;
+    });
+    const saved = await this.getChannel(ch);
+    if (!saved) throw new Error("作ったチャンネルが読めない");
+    return saved;
+  }
+
+  async updateGroupChannel(ch: number, name: string, members: DeviceId[]): Promise<Channel | null> {
+    const ok = await this.tx(async (c) => {
+      const [row] = await rows<{ created_at: Date }>(
+        c,
+        "SELECT created_at FROM channels WHERE id = ? AND kind = 'group' FOR UPDATE",
+        [ch],
+      );
+      if (!row) return false;
+      const nos = [...new Set(members.map(toNo))];
+      for (const no of nos) await ensureDevice(c, no, row.created_at);
+      await exec(c, "UPDATE channels SET name = ? WHERE id = ?", [name, ch]);
+      await exec(c, "DELETE FROM channel_members WHERE channel_id = ?", [ch]);
+      await insertMembers(c, ch, nos);
+      return true;
+    });
+    return ok ? this.getChannel(ch) : null;
+  }
+
+  async deleteGroupChannel(ch: number): Promise<boolean> {
+    // 入っている端末の行(channel_members)は、外部キーの ON DELETE CASCADE で一緒に消える
+    return (await exec(this.pool, "DELETE FROM channels WHERE id = ? AND kind = 'group'", [ch])).affectedRows > 0;
+  }
+
+  async getConfigRev(): Promise<number> {
+    const [r] = await rows<{ value: number }>(this.pool, "SELECT value FROM server_settings WHERE name = 'config_rev'");
+    return r ? Number(r.value) : 0;
+  }
+
+  async bumpConfigRev(): Promise<number> {
+    return this.tx(async (c) => {
+      await exec(
+        c,
+        "INSERT INTO server_settings (name, value) VALUES ('config_rev', 1) ON DUPLICATE KEY UPDATE value = value + 1",
+      );
+      const [r] = await rows<{ value: number }>(c, "SELECT value FROM server_settings WHERE name = 'config_rev'");
+      return Number(r?.value ?? 0);
+    });
+  }
+
   // ---- 本部から送ったもの ----
 
   async createMessage(m: NewMessage, targets: MessageTarget[]): Promise<Message> {
@@ -382,11 +467,13 @@ export class MysqlStorage implements Storage {
       const kind = m.kind === "order" ? "instruction" : m.source === "transcript" ? "transcript" : "text";
       const ins = await exec(
         c,
-        `INSERT INTO messages (kind, dst_device_id, body, instruction_code, position_id, seq, sent_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO messages (kind, dst_device_id, channel_id, from_device_id, body, instruction_code, position_id, seq, sent_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           kind,
           m.dst === "all" ? null : toNo(m.dst),
+          m.ch ?? null,
+          m.from === undefined ? null : toNo(m.from),
           m.body,
           m.kind === "order" ? (m.icode ?? null) : null,
           m.kind === "order" ? m.pos || null : null,
@@ -590,6 +677,35 @@ async function markSeen(c: PoolConnection, no: number, at: Date, wasOnline: bool
   }
 }
 
+async function insertMembers(c: Queryable, ch: number, nos: number[]): Promise<void> {
+  if (!nos.length) return;
+  await exec(c, "INSERT INTO channel_members (channel_id, device_id) VALUES ?", [nos.map((no) => [ch, no])]);
+}
+
+interface ChannelRow {
+  id: number;
+  kind: ChannelKind;
+  name: string;
+  created_at: Date;
+}
+
+async function channelsWhere(q: Queryable, where: string, params: unknown[]): Promise<Channel[]> {
+  const list = await rows<ChannelRow>(q, `SELECT id, kind, name, created_at FROM channels ${where} ORDER BY id`, params);
+  if (!list.length) return [];
+  const members = await rows<{ channel_id: number; device_id: number }>(
+    q,
+    "SELECT channel_id, device_id FROM channel_members WHERE channel_id IN (?) ORDER BY device_id",
+    [list.map((r) => r.id)],
+  );
+  return list.map((r) => ({
+    ch: r.id,
+    kind: r.kind,
+    name: r.name,
+    members: members.filter((m) => m.channel_id === r.id).map((m) => formatDeviceId(m.device_id)),
+    createdAt: r.created_at,
+  }));
+}
+
 async function messageById(q: Queryable, id: number): Promise<Message | null> {
   const [r] = await rows<MessageRow>(q, "SELECT * FROM messages WHERE id = ?", [id]);
   return r ? toMessage(r) : null;
@@ -724,6 +840,8 @@ interface MessageRow {
   id: number;
   kind: "text" | "instruction" | "transcript";
   dst_device_id: number | null;
+  channel_id: number | null;
+  from_device_id: number | null;
   body: string | null;
   instruction_code: number | null;
   position_id: number | null;
@@ -744,6 +862,8 @@ function toMessage(r: MessageRow): Message {
     source: r.kind === "transcript" ? "transcript" : "web",
     sentAt: r.sent_at,
     publishState: r.publish_state,
+    ...(r.channel_id !== null && { ch: r.channel_id }),
+    ...(r.from_device_id !== null && { from: formatDeviceId(r.from_device_id) }),
   };
 }
 

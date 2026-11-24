@@ -483,6 +483,73 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
       });
     });
 
+    describe("チャンネル【案】", () => {
+      it("1 対 1 のチャンネルは端末ごとに 1 つだけ。端末の行も無ければ作る", async () => {
+        const s = await make();
+        const a = await s.ensureDirectChannel("dev-001", "本部", at(0));
+        const again = await s.ensureDirectChannel("dev-001", "本部", at(5));
+        const b = await s.ensureDirectChannel("dev-002", "本部", at(0));
+        assert.equal(again.ch, a.ch);
+        assert.notEqual(b.ch, a.ch);
+        assert.deepEqual([a.kind, a.name, a.members], ["direct", "本部", ["dev-001"]]);
+        assert.equal((await s.getDevice("dev-001"))?.registered, false);
+        assert.equal((await s.listChannels()).length, 2);
+      });
+
+      it("同時に呼ばれても、1 対 1 のチャンネルは 1 つだけ", async () => {
+        const s = await make();
+        const list = await Promise.all([1, 2, 3].map(() => s.ensureDirectChannel("dev-001", "本部", at(0))));
+        assert.equal(new Set(list.map((c) => c.ch)).size, 1);
+        assert.equal((await s.listChannels()).length, 1);
+      });
+
+      it("グループを作る・変える・消す。入る端末は重なりを除いて番号の順", async () => {
+        const s = await make();
+        const g = await s.createGroupChannel("北班", ["dev-010", "dev-002", "dev-002"], at(0));
+        assert.deepEqual([g.kind, g.name, g.members], ["group", "北班", ["dev-002", "dev-010"]]);
+        assert.deepEqual(g.createdAt, at(0));
+
+        const u = await s.updateGroupChannel(g.ch, "北班A", ["dev-003"]);
+        assert.deepEqual([u?.name, u?.members], ["北班A", ["dev-003"]]);
+        assert.deepEqual((await s.getChannel(g.ch))?.members, ["dev-003"]);
+
+        assert.equal(await s.deleteGroupChannel(g.ch), true);
+        assert.equal(await s.getChannel(g.ch), null);
+        assert.equal(await s.deleteGroupChannel(g.ch), false);
+        assert.equal(await s.updateGroupChannel(g.ch, "x", []), null);
+      });
+
+      it("1 対 1 のチャンネルは、グループとして変えたり消したりできない", async () => {
+        const s = await make();
+        const d = await s.ensureDirectChannel("dev-001", "本部", at(0));
+        assert.equal(await s.updateGroupChannel(d.ch, "x", ["dev-002"]), null);
+        assert.equal(await s.deleteGroupChannel(d.ch), false);
+        assert.deepEqual((await s.getChannel(d.ch))?.members, ["dev-001"]);
+      });
+
+      it("設定の版は 0 から始まり、増やすたびに 1 つ増える", async () => {
+        const s = await make();
+        assert.equal(await s.getConfigRev(), 0);
+        assert.equal(await s.bumpConfigRev(), 1);
+        assert.equal(await s.bumpConfigRev(), 2);
+        assert.equal(await s.getConfigRev(), 2);
+      });
+
+      it("文に付けたチャンネルと、言った端末を読み戻せる", async () => {
+        const s = await make();
+        const g = await s.createGroupChannel("北班", ["dev-001", "dev-003"], at(0));
+        const m = await s.createMessage(message({ ch: g.ch, from: "dev-003", source: "transcript", body: "点検が終わりました" }), [
+          { deviceId: "dev-001", viaAtSend: "wifi" },
+          { deviceId: "dev-003", viaAtSend: "wifi" },
+        ]);
+        const r = await s.getMessage(m.id);
+        assert.deepEqual([r?.ch, r?.from, r?.source, r?.dst], [g.ch, "dev-003", "transcript", "all"]);
+        // チャンネルなしの文には付かない
+        const plain = await s.getMessage((await s.createMessage(message({ seq: 9 }), [])).id);
+        assert.deepEqual([plain?.ch, plain?.from], [undefined, undefined]);
+      });
+    });
+
     describe("原本", () => {
       it("書いたあとで結果と理由を変えられる", async () => {
         const s = await make();

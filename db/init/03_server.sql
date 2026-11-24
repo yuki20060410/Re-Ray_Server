@@ -39,3 +39,33 @@ CREATE TABLE events (
   note        VARCHAR(255),                           -- 理由（v!=1、src mismatch など）
   INDEX idx_events_at (at)
 );
+
+-- ---- チャンネル【案】（端末からの依頼 2026-11-17 の #1〜3。2026-11-24 追加）----
+-- direct = 本部とその端末の 1 対 1（端末ごとに 1 つ。サーバーが作る）、group = 管理画面で作るグループ。
+-- 番号（id）は端末とやり取りする ch。端末の都合で、1 台が入れるのは 8 個まで（サーバーのコードで確かめる）
+DROP TABLE IF EXISTS channel_members, channels, server_settings;
+CREATE TABLE channels (
+  id                SMALLINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  kind              ENUM('direct','group') NOT NULL,
+  name              VARCHAR(30) NOT NULL,
+  direct_device_id  SMALLINT UNSIGNED UNIQUE,            -- direct のときの端末（1 台に 1 つ）。group は NULL
+  created_at        DATETIME(3) NOT NULL,
+  CONSTRAINT fk_channels_devices FOREIGN KEY (direct_device_id) REFERENCES devices(id)
+);
+CREATE TABLE channel_members (
+  channel_id  SMALLINT UNSIGNED NOT NULL,
+  device_id   SMALLINT UNSIGNED NOT NULL,
+  PRIMARY KEY (channel_id, device_id),
+  INDEX idx_channel_members_device (device_id),
+  CONSTRAINT fk_channel_members_channels FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+  CONSTRAINT fk_channel_members_devices  FOREIGN KEY (device_id)  REFERENCES devices(id)
+);
+-- 端末に配る設定の版（config_rev）など、1 つだけの値
+CREATE TABLE server_settings (
+  name   VARCHAR(32) PRIMARY KEY,
+  value  BIGINT NOT NULL
+);
+-- 文がどのチャンネルのものか、だれが言ったか（NULL = 本部）。チャンネルを消しても番号は残すので外部キーは付けない
+ALTER TABLE messages
+  ADD COLUMN channel_id      SMALLINT UNSIGNED NULL AFTER dst_device_id,
+  ADD COLUMN from_device_id  SMALLINT UNSIGNED NULL AFTER channel_id;
