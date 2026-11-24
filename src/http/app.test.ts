@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { ChannelService } from "../server/channels.js";
 import { PcSeq } from "../server/pcSeq.js";
 import { Receiver } from "../server/receiver.js";
 import { Sender } from "../server/sender.js";
@@ -207,5 +208,75 @@ describe("一覧表の API", () => {
     const res = await app.inject({ method: "POST", url: "/api/devices", headers: { "content-type": "application/json" }, payload: "{" });
     assert.equal(res.statusCode, 400);
     assert.ok(JSON.parse(res.body).message);
+  });
+});
+
+describe("チャンネルの API【案】", () => {
+  async function setupChannels() {
+    const storage = new MemoryStorage();
+    const now = () => new Date(T0);
+    const pcSeq = new PcSeq(1);
+    const published: { topic: string; body: Record<string, unknown> }[] = [];
+    const publish = async (topic: string, payload: string) => {
+      published.push({ topic, body: JSON.parse(payload) });
+    };
+    const channels = new ChannelService({ storage, pcSeq, publishRetained: publish, now, log: quiet });
+    const sender = new Sender({ storage, pcSeq, publish, now, log: quiet, channels });
+    const app = await buildApp({
+      storage, sender, channels, isMqttConnected: () => true, storageKind: "memory", webDir: null, dev: null, now,
+    });
+    const call = async (method: "GET" | "POST" | "PUT" | "DELETE", url: string, payload?: unknown) => {
+      const res = await app.inject({ method, url, ...(payload !== undefined && { payload: payload as object }) });
+      return { status: res.statusCode, body: res.body ? (JSON.parse(res.body) as unknown) : null };
+    };
+    return { call, published };
+  }
+
+  it("端末を登録すると 1 対 1 ができ、設定が retain の口に流れる", async () => {
+    const { call, published } = await setupChannels();
+    await call("POST", "/api/devices", { id: "dev-001", owner: "山田" });
+    assert.equal(published.at(-1)?.topic, "reray/v1/down/dev-001/config");
+    const list = (await call("GET", "/api/channels")).body as unknown[];
+    assert.deepEqual(
+      list.map((c) => [get(c, "kind"), get(c, "name"), get(c, "members", 0, "owner")]),
+      [["direct", "本部", "山田"]],
+    );
+    const config = (await call("GET", "/api/devices/dev-001/config")).body;
+    assert.deepEqual(get(config, "channels", 0, "name"), "本部");
+    assert.equal((await call("GET", "/api/devices/dev-009/config")).status, 404);
+  });
+
+  it("グループを作る・変える・消す。だめなときは 422 / 404", async () => {
+    const { call } = await setupChannels();
+    await call("POST", "/api/devices", { id: "dev-001", owner: "山田" });
+    await call("POST", "/api/devices", { id: "dev-002", owner: "佐藤" });
+
+    const made = await call("POST", "/api/channels", { name: "北班", members: ["dev-001", "dev-002"] });
+    assert.equal(made.status, 201);
+    const ch = get(made.body, "ch") as number;
+    assert.deepEqual((get(made.body, "members") as unknown[]).map((m) => get(m, "id")), ["dev-001", "dev-002"]);
+
+    const changed = await call("PUT", `/api/channels/${ch}`, { name: "北班A", members: ["dev-002"] });
+    assert.deepEqual([get(changed.body, "name"), (get(changed.body, "members") as unknown[]).length], ["北班A", 1]);
+
+    assert.equal((await call("POST", "/api/channels", { name: "x", members: ["dev-009"] })).status, 422);
+    assert.equal((await call("POST", "/api/channels", { name: "長すぎる名前ですよね", members: [] })).status, 422);
+    assert.equal((await call("PUT", "/api/channels/999", { name: "x", members: [] })).status, 404);
+
+    assert.equal((await call("DELETE", `/api/channels/${ch}`)).status, 204);
+    assert.equal((await call("DELETE", `/api/channels/${ch}`)).status, 404);
+  });
+
+  it("チャンネルあての文を送ると、記録に ch とチャンネル名が出る", async () => {
+    const { call, published } = await setupChannels();
+    await call("POST", "/api/devices", { id: "dev-001", owner: "山田" });
+    const ch = get((await call("POST", "/api/channels", { name: "北班", members: ["dev-001"] })).body, "ch");
+    const sent = await call("POST", "/api/messages", { ch, body: "集合" });
+    assert.equal(sent.status, 201);
+    assert.equal(published.at(-1)?.topic, "reray/v1/down/dev-001/text");
+
+    const m = (await call("GET", `/api/messages/${get(sent.body, "id")}`)).body;
+    assert.deepEqual([get(m, "ch"), get(m, "ch_name"), get(m, "from")], [ch, "北班", null]);
+    assert.equal((await call("POST", "/api/messages", { ch: 999, body: "x" })).status, 422);
   });
 });

@@ -5,6 +5,7 @@
 //   (last_seen_at、open_sos、signal の id・is_sos・handled_at・out_of_range、届き具合の summary など)
 
 import type {
+  Channel,
   Delivery,
   Device,
   InstructionCode,
@@ -28,6 +29,19 @@ export interface Refs {
   signalCodes: Map<number, SignalCode>;
   instructionCodes: Map<number, InstructionCode>;
   owners: Map<string, string | null>;
+  /** 【案】チャンネル(2026-11-24) */
+  channels: Map<number, Channel>;
+}
+
+/** 【案】チャンネル(2026-11-24) */
+export function channelView(refs: Refs, c: Channel) {
+  return {
+    ch: c.ch,
+    kind: c.kind,
+    name: c.name,
+    members: c.members.map((id) => ({ id, owner: refs.owners.get(id) ?? null })),
+    created_at: iso(c.createdAt),
+  };
 }
 
 export function positionRef(refs: Refs, no: number | null | undefined) {
@@ -151,6 +165,12 @@ export function messageView(refs: Refs, m: Message, ds: Delivery[], withDevices:
     seq: m.seq,
     sent_at: iso(m.sentAt),
     publish_state: m.publishState,
+    /** 【案】チャンネルの文なら、その番号と今の名前(消したチャンネルは名前が null)。2026-11-24 */
+    ch: m.ch ?? null,
+    ch_name: m.ch === undefined ? null : (refs.channels.get(m.ch)?.name ?? null),
+    /** 【案】だれが言ったか(声を文字にしたもの)。null = 本部 */
+    from: m.from ?? null,
+    from_owner: m.from === undefined ? null : (refs.owners.get(m.from) ?? null),
     /** 【案】了解・できない を求めるか(指示コードの一覧の requires_response) */
     requires_response: m.kind === "order" && (code?.requiresResponse ?? true),
     ...deliveryCounts(ds),

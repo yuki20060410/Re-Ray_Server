@@ -116,6 +116,7 @@ const PAGES = [
   ['index.html', '端末一覧'],
   ['broadcast.html', '一斉送信'],
   ['logs.html', '記録'],
+  ['channels.html', 'チャンネル'],
   ['positions.html', 'ポジション'],
   ['devices.html', '端末の登録'],
 ];

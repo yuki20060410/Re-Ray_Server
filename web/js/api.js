@@ -38,6 +38,7 @@ function query(obj) {
 }
 
 const isMock = () => CONFIG.API_MODE === 'mock';
+const noMock = () => Promise.reject(new Error('偽のサーバーでは使えません（npm run dev で開いてください）'));
 const devToolsOn = () => isMock() || CONFIG.DEV_TOOLS;
 
 // ---- 本物のサーバーの形 → 画面の形 ----
@@ -77,9 +78,13 @@ const Wire = (() => {
   function message(m) {
     const kind = m.kind === 'order' ? 'instruction' : m.source === 'transcript' ? 'transcript' : 'text';
     const s = m.summary;
+    // 2026-11-24: チャンネルの文（グループ）は dst が 'all' でも「全員」ではないので、チャンネル名を出す
+    const toGroup = m.ch != null && m.dst === 'all';
     const v = {
       id: m.id, kind, dst_device_id: fromId(m.dst),
-      dst_name: m.dst === 'all' ? '全員' : (m.dst_owner || m.dst),
+      dst_name: toGroup ? `#${m.ch_name ?? m.ch}` : m.dst === 'all' ? '全員' : (m.dst_owner || m.dst),
+      channel: m.ch != null ? { ch: m.ch, name: m.ch_name } : null,
+      from_name: m.from ? (m.from_owner || m.from) : null,
       text: m.body, instruction_code: m.icode, position: pos(m.position),
       sent_at: m.sent_at,
       delivery: {
@@ -145,6 +150,23 @@ const Wire = (() => {
     getSignalCodes: () => sigCodes(),
     getInstructionCodes: () => insCodes(),
 
+    // チャンネル（2026-11-24）。画面の形: { ch, kind, name, members: [{ id: 1, owner_name }] }
+    async getChannels() {
+      return (await http('GET', '/channels')).map((c) => ({
+        ch: c.ch, kind: c.kind, name: c.name,
+        members: c.members.map((m) => ({ id: fromId(m.id), owner_name: m.owner })),
+      }));
+    },
+    async saveChannel({ ch, name, member_ids }) {
+      const body = { name, members: member_ids.map(toId) };
+      return ch ? http('PUT', `/channels/${ch}`, body) : http('POST', '/channels', body);
+    },
+    async deleteChannel(ch) {
+      await http('DELETE', `/channels/${ch}`); // 204（本文なし）。guard() が成功と分かるように値を返す
+      return { ch: Number(ch) };
+    },
+    sendToChannel: ({ ch, body }) => http('POST', '/messages', { ch: Number(ch), body }),
+
     async sendMessage({ kind, dst_device_id, body, instruction_code, position_id }) {
       const dst = dst_device_id == null ? 'all' : toId(dst_device_id);
       return kind === 'instruction'
@@ -192,6 +214,12 @@ const Api = {
   getPositions:        ()       => isMock() ? MockServer.getPositions()        : Wire.getPositions(),
   savePosition:        (p)      => isMock() ? MockServer.savePosition(p)       : Wire.savePosition(p),
   deletePosition:      (id)     => isMock() ? MockServer.deletePosition(id)    : Wire.deletePosition(id),
+
+  // チャンネル（2026-11-24）。偽のサーバーには無いので、本物のサーバーのときだけ使える
+  getChannels:         ()       => isMock() ? Promise.resolve([])              : Wire.getChannels(),
+  saveChannel:         (c)      => isMock() ? noMock()                         : Wire.saveChannel(c),
+  deleteChannel:       (ch)     => isMock() ? noMock()                         : Wire.deleteChannel(ch),
+  sendToChannel:       (m)      => isMock() ? noMock()                         : Wire.sendToChannel(m),
 
   getSignalCodes:      ()       => isMock() ? MockServer.getSignalCodes()      : Wire.getSignalCodes(),
   getInstructionCodes: ()       => isMock() ? MockServer.getInstructionCodes() : Wire.getInstructionCodes(),

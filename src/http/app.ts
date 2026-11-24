@@ -9,9 +9,11 @@ import { existsSync } from "node:fs";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { deviceNumber } from "../protocol/topics.js";
+import { ChannelError, type ChannelService } from "../server/channels.js";
 import { BODY_MAX, SendError, type Sender } from "../server/sender.js";
 import type { InstructionCode, PositionInput, Storage, Via } from "../storage/types.js";
 import {
+  channelView,
   deviceView,
   instructionCodeView,
   iso,
@@ -40,6 +42,8 @@ export interface AppDeps {
   /** 管理画面のフォルダ。null なら配らない */
   webDir: string | null;
   dev: DevTools | null;
+  /** 【案】チャンネル(2026-11-24)。無ければチャンネルの API は 404 */
+  channels?: ChannelService | null;
   now?: () => Date;
   logger?: boolean;
 }
@@ -75,17 +79,19 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // ---- 道具 ----
 
   async function refs(): Promise<Refs> {
-    const [positions, signalCodes, instructionCodes, devices] = await Promise.all([
+    const [positions, signalCodes, instructionCodes, devices, channelList] = await Promise.all([
       storage.listPositions(),
       storage.listSignalCodes(),
       storage.listInstructionCodes(),
       storage.listDevices(),
+      storage.listChannels(),
     ]);
     return {
       positions: new Map(positions.map((p) => [p.no, p])),
       signalCodes: new Map(signalCodes.map((c) => [c.code, c])),
       instructionCodes: new Map(instructionCodes.map((c) => [c.code, c])),
       owners: new Map(devices.map((d) => [d.id, d.owner])),
+      channels: new Map(channelList.map((c) => [c.ch, c])),
     };
   }
 
@@ -117,7 +123,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // ---- エラーの形 ----
 
   app.setErrorHandler((err: unknown, _req, reply: FastifyReply) => {
-    if (err instanceof ApiError || err instanceof SendError) {
+    if (err instanceof ApiError || err instanceof SendError || err instanceof ChannelError) {
       return reply.status(err.status).send({ error: err.code, message: err.message });
     }
     const status = (err as { statusCode?: number }).statusCode;
@@ -154,6 +160,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const existing = await storage.getDevice(id);
     if (existing?.registered) invalid(`${id} はもう登録されています`, "already_registered");
     await storage.registerDevice(id, owner, now());
+    // 【案】1 対 1 のチャンネルを作り、端末に設定を配る
+    await deps.channels?.deviceRegistered(id);
     const [d] = await deviceViews([id]);
     return reply.status(201).send(d);
   });
@@ -208,10 +216,51 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return saved ? instructionCodeView(saved) : notFound(`指示コード ${c.code} はありません`);
   });
 
+  // ---- チャンネル【案】(端末からの依頼 #1〜3。2026-11-24) ----
+
+  const channelsOrNotFound = (): ChannelService => deps.channels ?? notFound("チャンネルは使えません");
+
+  app.get("/api/channels", async () => {
+    channelsOrNotFound();
+    const r = await refs();
+    return (await storage.listChannels()).map((c) => channelView(r, c));
+  });
+
+  app.post<{ Body: Record<string, unknown> }>("/api/channels", async (req, reply) => {
+    const c = await channelsOrNotFound().createGroup(req.body?.name, req.body?.members);
+    return reply.status(201).send(channelView(await refs(), c));
+  });
+
+  app.put<{ Params: { ch: string }; Body: Record<string, unknown> }>("/api/channels/:ch", async (req) => {
+    const ch = intParam(req.params.ch, 1, 65535, "チャンネルの番号が正しくありません");
+    const c = await channelsOrNotFound().updateGroup(ch, req.body?.name, req.body?.members);
+    return channelView(await refs(), c);
+  });
+
+  app.delete<{ Params: { ch: string } }>("/api/channels/:ch", async (req, reply) => {
+    const ch = intParam(req.params.ch, 1, 65535, "チャンネルの番号が正しくありません");
+    await channelsOrNotFound().deleteGroup(ch);
+    return reply.status(204).send();
+  });
+
+  // 端末に配る設定(確かめる用。端末には down/{id}/config で届く)
+  app.get<{ Params: { id: string } }>("/api/devices/:id/config", async (req) => {
+    const id = deviceIdParam(req.params.id);
+    if (!(await storage.getDevice(id))?.registered) notFound(`${id} は登録されていません`);
+    return channelsOrNotFound().configFor(id);
+  });
+
   // ---- 送る(W3・W4。M3) ----
 
   app.post<{ Body: Record<string, unknown> }>("/api/messages", async (req, reply) => {
     const b = req.body ?? {};
+    // 【案】チャンネルあて(本部が言った文)
+    if (b.ch !== undefined && b.ch !== null && b.ch !== "") {
+      channelsOrNotFound();
+      const ch = intParam(b.ch, 1, 65535, "チャンネルの番号が正しくありません");
+      const m = await sender.sendToChannel({ ch, body: typeof b.body === "string" ? b.body : "" });
+      return reply.status(201).send({ id: m.id });
+    }
     const dst = typeof b.dst === "string" ? b.dst : bad("送り先(dst)を入れてください");
     const m =
       b.icode !== undefined && b.icode !== null

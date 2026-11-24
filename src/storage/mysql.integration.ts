@@ -17,7 +17,7 @@ if (existsSync(".env")) process.loadEnvFile(".env");
 const DB = "reray_test";
 const sql = (name: string) => readFileSync(new URL(`../../db/init/${name}`, import.meta.url), "utf8");
 const TABLES = [
-  "events", "admins", "device_events", "message_deliveries", "messages", "signals", "lora_frames",
+  "channel_members", "channels", "server_settings", "events", "admins", "device_events", "message_deliveries", "messages", "signals", "lora_frames",
   "devices", "instruction_codes", "signal_codes", "positions",
 ];
 
