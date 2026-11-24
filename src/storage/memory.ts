@@ -169,6 +169,7 @@ export class MemoryStorage implements Storage {
     if (update.via !== undefined) device.via = update.via;
     if (update.lat !== undefined) device.lat = update.lat;
     if (update.lon !== undefined) device.lon = update.lon;
+    if (update.mode !== undefined) device.mode = update.mode;
     this.markSeen(device, update.receivedAt);
   }
 
@@ -454,6 +455,7 @@ export class MemoryStorage implements Storage {
       lastSeenAt: null,
       createdAt: at,
       registered: false,
+      mode: null,
     };
   }
 

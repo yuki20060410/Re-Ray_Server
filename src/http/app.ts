@@ -260,6 +260,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     return channelsOrNotFound().configFor(id);
   });
 
+  // ---- モード【案】(端末からの依頼 #5。2026-11-24) ----
+  // 本部から全端末を 平常時 / 緊急時 に切り替える。各端末の今のモードは /api/devices の mode
+
+  app.post<{ Body: Record<string, unknown> }>("/api/mode", async (req, reply) => {
+    const r = await sender.sendMode(req.body?.mode);
+    return reply.status(201).send({ mode: req.body?.mode, seq: r.seq, sent_at: iso(r.at) });
+  });
+
   // ---- 音声【案】(端末からの依頼 #4。2026-11-24) ----
   // 端末: POST /api/voice、Content-Type: audio/wav、X-Device・X-Channel・X-Seq。本体は WAV(16 秒・600KB まで)
   // 受け取ったらすぐ 202 {id}。文字起こしはこのあとで行い、終わったらチャンネルに配る

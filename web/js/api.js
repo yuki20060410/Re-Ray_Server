@@ -68,6 +68,7 @@ const Wire = (() => {
   function device(d, codes) {
     return {
       id: fromId(d.id), owner_name: d.owner, position: pos(d.position),
+      mode: d.mode ?? null, // 2026-11-24: 平常時 normal / 緊急時 emergency / まだ届いていない null
       is_online: d.online, via: d.via, battery: d.battery, has_glass: !!d.glass,
       last_seen_at: d.last_seen_at,
       last_signal: d.last_signal ? signal(d.last_signal, codes) : null,
@@ -167,6 +168,9 @@ const Wire = (() => {
     },
     sendToChannel: ({ ch, body }) => http('POST', '/messages', { ch: Number(ch), body }),
 
+    // 全端末のモードを切り替える（2026-11-24）。mode = 'normal' / 'emergency'
+    setMode: (mode) => http('POST', '/mode', { mode }),
+
     // 音声（2026-11-24）。サーバーの形のまま使う（id、device、owner、ch_name、status、text、audio_url …）
     getVoices: (o = {}) => http('GET', `/voice${query(o)}`),
 
@@ -224,6 +228,7 @@ const Api = {
   deleteChannel:       (ch)     => isMock() ? noMock()                         : Wire.deleteChannel(ch),
   sendToChannel:       (m)      => isMock() ? noMock()                         : Wire.sendToChannel(m),
   getVoices:           (o = {}) => isMock() ? Promise.resolve([])              : Wire.getVoices(o),
+  setMode:             (mode)   => isMock() ? noMock()                         : Wire.setMode(mode),
 
   getSignalCodes:      ()       => isMock() ? MockServer.getSignalCodes()      : Wire.getSignalCodes(),
   getInstructionCodes: ()       => isMock() ? MockServer.getInstructionCodes() : Wire.getInstructionCodes(),

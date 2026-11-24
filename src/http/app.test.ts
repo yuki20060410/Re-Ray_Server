@@ -342,3 +342,18 @@ describe("音声の API【案】", () => {
     await rm(dir, { recursive: true, force: true });
   });
 });
+
+describe("モードの API【案】", () => {
+  it("POST /api/mode で全端末に流し、端末の今のモードは /api/devices の mode に出る", async () => {
+    const { call, up, published } = await setup();
+    const r = await call("POST", "/api/mode", { mode: "emergency" });
+    assert.equal(r.status, 201);
+    assert.equal(published.at(-1)?.topic, "reray/v1/down/all/mode");
+    assert.equal((await call("POST", "/api/mode", { mode: "x" })).status, 422);
+
+    await call("POST", "/api/devices", { id: "dev-001", owner: "山田" });
+    await up("status", "dev-001", { mode: "emergency" });
+    const list = (await call("GET", "/api/devices")).body as unknown[];
+    assert.equal(get(list[0], "mode"), "emergency");
+  });
+});

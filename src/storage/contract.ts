@@ -250,6 +250,15 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
     });
 
     describe("端末", () => {
+      it("モードは届くまで null。届いたら残り、無い status では変わらない(2026-11-24)", async () => {
+        const s = await make();
+        await s.recordStatus({ deviceId: "dev-001", receivedAt: at(0) });
+        assert.equal((await s.getDevice("dev-001"))?.mode, null);
+        await s.recordStatus({ deviceId: "dev-001", receivedAt: at(30), mode: "emergency" });
+        await s.recordStatus({ deviceId: "dev-001", receivedAt: at(60), battery: 70 });
+        assert.equal((await s.getDevice("dev-001"))?.mode, "emergency");
+      });
+
       it("status の無い項目は前の値のまま", async () => {
         const s = await make();
         await s.recordStatus({ deviceId: "dev-001", receivedAt: at(0), battery: 80, glass: true });

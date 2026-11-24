@@ -9,7 +9,7 @@
 //   `down/{id}/text` で流す(端末からの依頼 #3)。文には ch・from・from_name を付ける。
 //   1 台あての文には、その端末の 1 対 1 のチャンネルの ch を付ける(端末が「本部」に入れられるように)
 
-import { deviceNumber, downTextTopic } from "../protocol/topics.js";
+import { deviceNumber, DOWN_ALL_MODE, downTextTopic } from "../protocol/topics.js";
 import type { Device, DeviceId, Message, MessageSource, MessageTarget, NewMessage, Storage, ViaAtSend } from "../storage/types.js";
 import type { ChannelService } from "./channels.js";
 import type { PcSeq } from "./pcSeq.js";
@@ -191,6 +191,29 @@ export class Sender {
     const where = dsts.length === 1 ? downTextTopic(dsts[0] ?? "all") : `ch ${saved.ch}(${dsts.length} 台に 1 通ずつ)`;
     this.log.info(`${where} → sent (mid=${saved.id}, ${targets.length} 台)`);
     return { ...saved, publishState: "sent" };
+  }
+
+  /**
+   * 【案】全端末のモードを切り替える(端末からの依頼 11/17 #5。2026-11-24)。
+   * `down/all/mode` に流す(retain なし。切れていた端末には、永続セッションでつながり直したときに届く)。
+   * 返事(ack)は求めない。端末は切り替えたら status の mode で知らせるので、届いたかは端末一覧で分かる
+   */
+  async sendMode(mode: unknown): Promise<{ seq: number; at: Date }> {
+    if (mode !== "normal" && mode !== "emergency") {
+      throw new SendError(422, "bad_mode", "モードは normal(平常時)か emergency(緊急時)です");
+    }
+    const at = this.now();
+    const seq = this.pcSeq.next();
+    const payload = JSON.stringify({ v: 1, type: "mode", src: "pc", dst: "all", seq, ts: Math.floor(at.getTime() / 1000), mode });
+    try {
+      await this.publish(DOWN_ALL_MODE, payload);
+    } catch (err) {
+      await this.storage.saveEvent({ at, direction: "down", topic: DOWN_ALL_MODE, payload, result: "failed", note: String(err).slice(0, 255) });
+      throw new SendError(503, "mqtt_unavailable", "ブローカーにつながっていないので切り替えられませんでした");
+    }
+    await this.storage.saveEvent({ at, direction: "down", topic: DOWN_ALL_MODE, payload, result: "sent" });
+    this.log.info(`${DOWN_ALL_MODE} → ${mode}`);
+    return { seq, at };
   }
 
   /** 宛先は "all" か、登録した端末(INTERFACES §4.1: 登録されていない端末ID は 422) */

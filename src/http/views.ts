@@ -100,6 +100,8 @@ export function deviceView(refs: Refs, d: Device, last: Signal | undefined, open
     id: d.id,
     owner: d.owner,
     registered: d.registered,
+    /** 【案】平常時(normal)/ 緊急時(emergency)。まだ届いていなければ null(2026-11-24) */
+    mode: d.mode,
     online: d.online,
     via: d.via,
     battery: d.battery,

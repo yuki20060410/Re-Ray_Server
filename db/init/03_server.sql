@@ -97,3 +97,7 @@ CREATE TABLE voice_clips (
 -- 声を文字にした文は 40 文字に収まらない（端末からの依頼 §4.3）。サーバーは文字起こしの文だけ 200 文字まで送る
 -- （src/server/sender.ts の TRANSCRIPT_MAX）。本部が打つ文の上限（40 文字）はグラスの文字数が決まるまで変えない
 ALTER TABLE messages MODIFY body VARCHAR(255);
+
+-- ---- モード【案】（端末からの依頼 2026-11-17 の #5。2026-11-24 追加）----
+-- 端末が status で知らせる 平常時（normal）／緊急時（emergency）。まだ届いていなければ NULL
+ALTER TABLE devices ADD COLUMN mode ENUM('normal','emergency') NULL AFTER has_glass;

@@ -23,6 +23,7 @@
 | `reray/v1/down/{id}/ack` | サーバー → 端末1台 | 【案】本部に届いた(§2.6) | 1 |
 | `reray/v1/up/gw/{出口ID}/lora` | 出口 → サーバー | 【案】LoRa で受けたフレームを生のまま(§2.7) | 1 |
 | `reray/v1/down/{id}/config` | サーバー → 端末1台 | 【案】チャンネルの一覧(§2.8)。**retain あり** | 1 |
+| `reray/v1/down/all/mode` | サーバー → 全端末 | 【案】モードの一斉切り替え(§2.10) | 1 |
 
 ### HTTP API
 
@@ -174,6 +175,7 @@
 
 - 一定間隔で送る(30秒ごと【案】)。`battery` は電池の残り(%)。測れなければ項目ごと省く。`glass` はグラスと BLE でつながっているか。
 - 【案】GPS が使えれば `lat`・`lon`(10進の度)を付ける(FA-16、できれば)。無ければ省く。
+- 【案】`mode`: `normal`(平常時)/ `emergency`(緊急時)。端末からの依頼 11/17 #5(2026-11-24)。切り替えたらすぐ status を送る。サーバーは端末一覧の `mode` に出す。ほかの値は不正(`mode`)。
 - `online` はふだん省く。切れたときだけ、ブローカーが `false` を流す(§1 の遺言)。
 
 【修正案】LoRa 状態の端末は status を Wi-Fi で送れないため、LoRa に「心拍」(5分おき)を足し、出口が status の JSON に直して送る。電池の残りが載る:
@@ -308,6 +310,19 @@ POST /api/voice
 | 断るとき | 400(ヘッダの形)、413(大きすぎる)、415(Content-Type が違う)、422(登録していない端末、入っていないチャンネル、WAV でない・圧縮・16 ビットでない、16 秒を超える) |
 | 文字起こし | OpenAI と同じ形の API を呼ぶ(`.env` の `STT_URL`・`STT_MODEL`)。自宅サーバーの faster-whisper(`compose.yaml` の `stt`)でも、外のサービスでも同じ。`STT_URL` が無ければ仮の文(「(音声 3 秒。文字起こしは未設定)」)を配る |
 | 認証 | 検証版は無し。自宅サーバーでは、手前の「名前とパスワードを聞く入口」を通る。`X-Device` は端末の申告なので、ほかの端末になりすませる(未決) |
+
+### 2.10 モードの一斉切り替え(サーバー → 全端末)【案】(2026-11-24。端末からの依頼 11/17 #5)
+
+```json
+{"v":1,"type":"mode","src":"pc","dst":"all","seq":9,"ts":1791849700,"mode":"emergency"}
+```
+
+| 項目 | 内容 |
+|---|---|
+| トピック | `reray/v1/down/all/mode`、QoS 1、retain なし(切れていた端末には、永続セッションでつながり直したときに届く) |
+| `mode` | `normal` / `emergency` |
+| 端末 | 切り替えて、すぐ status(§2.3)の `mode` で知らせる。返事(ack)は要らない。届いたかは端末一覧の `mode` で分かる |
+| 管理画面 | 「一斉送信」の「全端末のモードを切り替える」(`POST /api/mode`) |
 
 ---
 
@@ -542,6 +557,7 @@ JSON、UTF-8。パスの接頭辞は `/api`。検証版は認証なし(ローカ
 | GET | `/api/devices/{id}/config` | その端末に配る設定(確かめる用。§2.8) |
 | POST | `/api/messages` | `{ch, body}` でチャンネルあて(本部が言った文)。`dst` の形は今までどおり |
 | POST | `/api/voice` | 端末の音声(§2.9) |
+| POST | `/api/mode` | 全端末のモードを切り替える。`{mode: "normal" \| "emergency"}` → 201。端末一覧(`/api/devices`)に各端末の `mode` が出る |
 | GET | `/api/voice?limit=&device=` | 音声の一覧(新しい順)。`status`(queued・done・empty・failed)、`text`、`error`、`audio_url` など |
 | GET | `/api/voice/{id}/audio` | 音そのもの(audio/wav。管理画面で聞く) |
 

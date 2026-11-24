@@ -29,6 +29,12 @@ function fmtAgo(iso) {
   if (s < 86400) return `${Math.floor(s / 3600)}時間前`;
   return `${Math.floor(s / 86400)}日前`;
 }
+// 2026-11-24: 端末のモード（平常時・緊急時）
+function modeHtml(m) {
+  if (m === 'emergency') return '<span class="tag sos">緊急</span>';
+  if (m === 'normal') return '<span class="tag">平常</span>';
+  return '<span class="muted">—</span>';
+}
 const viaLabel = (v) => ({ wifi: 'Wi-Fi', lora: 'LoRa', offline: '切れている' }[v] || '—');
 
 function signalLabel(s) {

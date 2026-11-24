@@ -136,6 +136,22 @@ describe("送信", () => {
   });
 });
 
+describe("モードの一斉切り替え【案】", () => {
+  it("down/all/mode に流す。形の違うモードは 422、流せなければ 503", async () => {
+    const ok = await setup();
+    await ok.sender.sendMode("emergency");
+    assert.deepEqual(
+      [ok.published[0]?.topic, ok.published[0]?.body.type, ok.published[0]?.body.mode, ok.published[0]?.body.dst],
+      ["reray/v1/down/all/mode", "mode", "emergency", "all"],
+    );
+    await rejects(ok.sender.sendMode("panic"), 422, "bad_mode");
+
+    const ng = await setup({ failPublish: true });
+    await rejects(ng.sender.sendMode("normal"), 503, "mqtt_unavailable");
+    assert.equal(ng.storage.events.at(-1)?.result, "failed");
+  });
+});
+
 describe("チャンネル【案】", () => {
   async function withChannels(opts: { failPublish?: boolean } = {}) {
     const base = await setup(opts);

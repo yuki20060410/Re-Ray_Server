@@ -20,6 +20,8 @@ import type { DedupRule } from "./dedup.js";
 
 export type DeviceId = string;
 export type Via = "wifi" | "lora";
+/** 【案】平常時(トランシーバーとして使う)/ 緊急時(定型信号と SOS)。端末からの依頼 11/17 #5 */
+export type DeviceMode = "normal" | "emergency";
 
 // ---- 原本(events) ----
 
@@ -66,6 +68,8 @@ export interface Device {
   createdAt: Date;
   /** true = 管理画面で登録した。false = 受信して初めて見つけた(owner は空) */
   registered: boolean;
+  /** 【案】端末が最後に知らせたモード。まだ届いていなければ null(2026-11-24) */
+  mode: DeviceMode | null;
 }
 
 /** status で届いた値。項目が無いもの(undefined)は前の値のまま */
@@ -77,6 +81,7 @@ export interface StatusUpdate {
   via?: Via;
   lat?: number;
   lon?: number;
+  mode?: DeviceMode;
 }
 
 /** 「切れた」の理由(B 案の device_events.kind) */

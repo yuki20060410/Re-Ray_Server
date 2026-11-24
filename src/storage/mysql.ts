@@ -21,6 +21,7 @@ import type {
   Delivery,
   Device,
   DeviceId,
+  DeviceMode,
   EventId,
   EventResult,
   InstructionCode,
@@ -235,8 +236,9 @@ export class MysqlStorage implements Storage {
       await exec(
         c,
         `UPDATE devices SET battery = COALESCE(?, battery), has_glass = COALESCE(?, has_glass),
-                via = COALESCE(?, via), lat = COALESCE(?, lat), lon = COALESCE(?, lon) WHERE id = ?`,
-        [u.battery ?? null, u.glass ?? null, u.via ?? null, u.lat ?? null, u.lon ?? null, no],
+                via = COALESCE(?, via), lat = COALESCE(?, lat), lon = COALESCE(?, lon), mode = COALESCE(?, mode)
+          WHERE id = ?`,
+        [u.battery ?? null, u.glass ?? null, u.via ?? null, u.lat ?? null, u.lon ?? null, u.mode ?? null, no],
       );
       await markSeen(c, no, u.receivedAt, wasOnline, u.battery);
     });
@@ -816,6 +818,7 @@ interface DeviceRow {
   lon: number | null;
   last_seen_at: Date | null;
   created_at: Date;
+  mode: DeviceMode | null;
 }
 
 function toDevice(r: DeviceRow): Device {
@@ -832,6 +835,7 @@ function toDevice(r: DeviceRow): Device {
     lastSeenAt: r.last_seen_at,
     createdAt: r.created_at,
     registered: Boolean(r.registered),
+    mode: r.mode ?? null,
   };
 }
 

@@ -11,7 +11,7 @@ import mqtt, { type MqttClient } from "mqtt";
 import { ApiError, type DevTools } from "../http/app.js";
 import { deviceNumber } from "../protocol/topics.js";
 import type { Receiver } from "../server/receiver.js";
-import type { Storage, Via } from "../storage/types.js";
+import type { DeviceMode, Storage, Via } from "../storage/types.js";
 
 const PREFIX = "reray/v1";
 const STATUS_INTERVAL_MS = 30 * 1000;
@@ -32,6 +32,8 @@ export class FakeDevice {
   glass: boolean;
   battery: number;
   pos: number;
+  /** 【案】平常時 / 緊急時(2026-11-24) */
+  mode: DeviceMode;
   /** 送った seq → 「本部に届いた」が来たか */
   readonly hqAcked = new Map<number, boolean>();
   private readonly url: string;
@@ -47,6 +49,7 @@ export class FakeDevice {
     this.no = deviceNumber(o.id) ?? 0;
     this.via = o.via ?? "wifi";
     this.glass = o.glass ?? true;
+    this.mode = "normal";
     this.battery = o.battery ?? 90;
     this.pos = o.pos ?? 0;
   }
@@ -101,7 +104,7 @@ export class FakeDevice {
   sendStatus(): void {
     this.publish("status", {
       v: 1, type: "status", src: this.id, seq: this.nextSeq(), ts: unixNow(),
-      battery: this.battery, glass: this.glass, ...(this.via === "lora" && { via: "lora" }),
+      battery: this.battery, glass: this.glass, mode: this.mode, ...(this.via === "lora" && { via: "lora" }),
     }, 0);
   }
 
@@ -142,6 +145,12 @@ export class FakeDevice {
       this.hqAcked.set(msg.ack_seq, true);
       return;
     }
+    // 【案】本部からのモードの切り替え(2026-11-24): 切り替えて、すぐ status で知らせる
+    if (msg.type === "mode" && (msg.mode === "normal" || msg.mode === "emergency")) {
+      this.mode = msg.mode;
+      this.later(300 + (this.no % 10) * 100, () => this.sendStatus());
+      return;
+    }
     if (msg.type !== "text" || (msg.dst !== "all" && msg.dst !== this.id) || typeof msg.mid !== "number") return;
     const order = msg.icode !== undefined;
     if (this.via === "lora" && !order) return; // LoRa では自由な文は届かない
@@ -149,7 +158,8 @@ export class FakeDevice {
     const mid = msg.mid;
     const lag = (this.via === "lora" ? 5000 : 1000) + (this.no % 20) * 150;
     this.later(lag, () => this.ack(mid, 3));
-    if (order && this.glass) {
+    // 了解・できない は、求められた指示にだけ返す(requires_response。2026-11-24)
+    if (order && this.glass && msg.requires_response !== false) {
       this.later(lag + 3000 + (this.no % 10) * 700, () => this.ack(mid, this.no % 5 === 0 ? 5 : 4));
     }
   }
