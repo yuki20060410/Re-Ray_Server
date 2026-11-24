@@ -1,6 +1,8 @@
 // 設定(.env から読む。値の意味は .env.example)
 // 2026-11-06: 保存先(STORAGE)、MySQL、HTTP のポート、テスト用の操作(DEV_TOOLS)を足した
-// 2026-11-24: 文字起こし(STT_*)と音声の置き場所(VOICE_DIR)を足した
+// 2026-11-24: 文字起こし(STT_*)と音声の置き場所(VOICE_DIR)、LoRa の署名の鍵(RERAY_HMAC_KEY)を足した
+
+import { parseHmacKey } from "./lora/frame.js";
 
 export interface Config {
   mqttUrl: string;
@@ -23,6 +25,8 @@ export interface Config {
   stt: { url: string | undefined; model: string; apiKey: string | undefined; language: string };
   /** 【案】端末から届いた音声のファイルを置くフォルダー */
   voiceDir: string;
+  /** 【案】LoRa のフレームの署名の鍵(RERAY_HMAC_KEY、16 進)。無ければ出口の生渡しはすべて捨てる */
+  loraKey: Buffer | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -55,5 +59,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       language: env.STT_LANGUAGE || "ja",
     },
     voiceDir: env.VOICE_DIR || "data/voice",
+    loraKey: parseHmacKey(env.RERAY_HMAC_KEY),
   };
 }

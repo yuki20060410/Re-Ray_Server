@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { encodeAck, encodeReport, wrapEnvelope } from "../lora/frame.js";
 import { MemoryStorage } from "../storage/memory.js";
 import { PcSeq } from "./pcSeq.js";
 import { Receiver } from "./receiver.js";
@@ -149,11 +150,85 @@ describe("受信(status・遺言・そのほか)", () => {
     assert.deepEqual(d?.lastSeenAt, new Date(T0));
   });
 
-  it("出口の生渡しは、分解ができるまで原本(16 進)だけ残す", async () => {
+  it("出口の生渡しは、鍵が無ければ捨てる(署名を確かめられない)。原本は 16 進で残る", async () => {
     const { storage, receiver } = setup();
     const out = await receiver.handle("reray/v1/up/gw/dev-100/lora", Uint8Array.from([1, 0xab]));
-    assert.equal(out.result, "ignored");
+    assert.equal(out.result, "invalid");
+    assert.match(out.note ?? "", /no hmac key/);
     assert.equal(storage.events[0]?.payload, "01ab");
+  });
+});
+
+// 2026-11-24 追加: 出口の生渡し(LoRa のフレーム)【案】
+describe("受信(出口の生渡し)", () => {
+  const KEY = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+  const GW = "reray/v1/up/gw/dev-100/lora";
+
+  function setupLora() {
+    const storage = new MemoryStorage();
+    const published: { topic: string; body: Record<string, unknown> }[] = [];
+    let now = T0;
+    const receiver = new Receiver({
+      storage, pcSeq: new PcSeq(9), now: () => new Date(now), log: quiet, loraKey: KEY,
+      publish: async (topic, payload) => {
+        published.push({ topic, body: JSON.parse(payload) });
+      },
+    });
+    return { storage, receiver, published, advance: (sec: number) => (now += sec * 1000) };
+  }
+
+  it("REPORT を分解して保存し、受信時刻は age_ms だけ前にする。via = lora。「本部に届いた」も返す", async () => {
+    const { storage, receiver, published } = setupLora();
+    const frame = encodeReport({ src: 1, seq: 42, code: 6, pos: 3, qty: 4, time: 1795498805 }, KEY);
+    const out = await receiver.handle(GW, wrapEnvelope(frame, { rssi: -101, snr: 6, ageMs: 4000 }));
+    await receiver.drain();
+
+    assert.equal(out.result, "accepted");
+    assert.match(out.note ?? "", /gw=dev-100 rssi=-101 snr=6 age=4000ms/);
+    const s = storage.signals[0];
+    assert.deepEqual([s?.deviceId, s?.seq, s?.code, s?.pos, s?.n, s?.via], ["dev-001", 42, 6, 3, 20, "lora"]);
+    assert.deepEqual(s?.receivedAt, new Date(T0 - 4000));
+    assert.deepEqual(s?.deviceTs, new Date(1795498805 * 1000));
+    assert.deepEqual([published[0]?.topic, published[0]?.body.ack_seq], ["reray/v1/down/dev-001/ack", 42]);
+  });
+
+  it("Wi-Fi の JSON と LoRa の両方から届いた同じ信号は 1 件(重複の判定は同じ)", async () => {
+    const { storage, receiver } = setupLora();
+    const json = { v: 1, type: "signal", src: "dev-001", seq: 42, ts: 1795498805, code: 6, pos: 3, via: "wifi" };
+    await receiver.handle("reray/v1/up/dev-001/signal", Buffer.from(JSON.stringify(json)));
+    const out = await receiver.handle(GW, wrapEnvelope(encodeReport({ src: 1, seq: 42, code: 6, pos: 3, time: 1795498805 }, KEY)));
+    assert.equal(out.result, "duplicate");
+    assert.equal(storage.signals.length, 1);
+  });
+
+  it("複数の出口から同じフレームが届いても 1 件", async () => {
+    const { storage, receiver } = setupLora();
+    const frame = encodeReport({ src: 2, seq: 7, code: 1 }, KEY);
+    await receiver.handle(GW, wrapEnvelope(frame));
+    const out = await receiver.handle("reray/v1/up/gw/dev-101/lora", wrapEnvelope(frame, { ageMs: 300 }));
+    assert.equal(out.result, "duplicate");
+    assert.equal(storage.signals.length, 1);
+  });
+
+  it("ACK 種類 3 は、pc の連番(ref_seq)から 1 通を探して「届いた」に入れる", async () => {
+    const { storage, receiver } = setupLora();
+    await storage.registerDevice("dev-005", "鈴木", new Date(T0));
+    const m = await storage.createMessage(
+      { seq: 300, dst: "dev-005", body: "待機", kind: "order", icode: 3, pos: 0, source: "web", sentAt: new Date(T0 - 60_000) },
+      [{ deviceId: "dev-005", viaAtSend: "lora" }],
+    );
+    const out = await receiver.handle(GW, wrapEnvelope(encodeAck({ src: 5, seq: 9, refSrc: 0, refSeq: 300, ackKind: 3 }, KEY)));
+    assert.equal(out.result, "accepted");
+    assert.ok((await storage.getDeliveries(m.id))[0]?.ackedAt);
+  });
+
+  it("署名が合わないものは捨てる。BEACON・LoRa の中だけの ACK は扱わない(原本だけ)", async () => {
+    const { storage, receiver } = setupLora();
+    const bad = await receiver.handle(GW, wrapEnvelope(encodeReport({ src: 1, seq: 1, code: 6 }, Buffer.alloc(16, 7))));
+    assert.deepEqual([bad.result, bad.note?.startsWith("bad mic")], ["invalid", true]);
+    const near = await receiver.handle(GW, wrapEnvelope(encodeAck({ src: 1, seq: 2, refSrc: 0, refSeq: 1, ackKind: 1 }, KEY)));
+    assert.equal(near.result, "ignored");
+    assert.equal(storage.signals.length, 0);
   });
 });
 

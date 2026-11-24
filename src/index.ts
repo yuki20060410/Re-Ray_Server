@@ -42,7 +42,10 @@ const pcSeq = await PcSeq.fromStorage(storage);
 let publish: (topic: string, payload: string) => Promise<void> = async () => {
   throw new Error("MQTT にまだつながっていない");
 };
-const receiver = new Receiver({ storage, pcSeq, publish: (t, p) => publish(t, p) });
+const receiver = new Receiver({ storage, pcSeq, publish: (t, p) => publish(t, p), loraKey: config.loraKey });
+if (!config.loraKey) {
+  console.warn("RERAY_HMAC_KEY が無いので、出口から届く LoRa のフレームは署名を確かめられず、すべて捨てます");
+}
 const client = connectMqtt(config, (topic, payload) => receiver.handle(topic, payload));
 publish = publisher(client);
 
