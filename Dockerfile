@@ -18,5 +18,7 @@ RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 # 管理画面(2026-11-06 追加。サーバーが dist/../web を配る)
 COPY web ./web
+# 端末から届いた音声の置き場所(2026-11-24 追加)。node で書けるように先に作る(ボリュームはこの持ち主を引き継ぐ)
+RUN mkdir -p /app/data/voice && chown -R node:node /app/data
 USER node
 CMD ["node", "dist/index.js"]

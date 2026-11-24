@@ -241,7 +241,13 @@ npm run fake -- will   --id dev-001                           # 遺言を登録�
 npm run fake -- raw    --topic reray/v1/up/dev-009/signal --payload "{"   # 壊れた JSON
 npm run fake -- listen --id dev-001                           # 下りを表示し続ける
 npm run fake -- listen --id dev-001 --ack 4                   # 届いた text に ack を返す(3 受け取った / 4 了解 / 5 できない)
+npm run fake -- voice  --id dev-001 --ch 3 --file 録音.wav    # 音声を送り、文字になって届くのを待つ(--file が無ければ 3 秒の音を作る)
+
+# 文字起こし(自宅サーバーの faster-whisper。はじめてはイメージとモデルで数 GB を取ってくる)
+docker compose --profile stt up -d stt    # そのあと .env に STT_URL=http://localhost:8000 を書いて npm run dev
 ```
+
+**音声を手で確かめる**:管理画面の「端末の登録」で dev-001 を登録 →「チャンネル」でグループを作って dev-001 を入れる → `npm run fake -- voice --id dev-001 --ch <グループの番号>`。`STT_URL` が空なら「(音声 3 秒。文字起こしは未設定)」が、そのチャンネルに届く。管理画面の「音声」で状態と音を確かめられる。
 
 **M1 を手で確かめる**:`docker compose up -d mosquitto` → `npm run dev` → 別のターミナルで `npm run fake -- signal`。サーバーの画面に `reray/v1/up/dev-001/signal → accepted` と出て、疑似端末に「本部に届いた: 1 件すべて」と出れば OK。
 
@@ -279,15 +285,16 @@ Re-Ray_Server/
 ├── .env.example           接続情報のひな形(コピーして .env を作る)
 ├── src/                   サーバーアプリ(TypeScript。入口は src/index.ts)
 │   ├── protocol/          トピックと端末ID(topics.ts)、上りの JSON の検証(validate.ts)
-│   ├── server/            受信(receiver.ts)、送信(sender.ts)、「切れた」の判定(presence.ts)、pc の連番(pcSeq.ts)
+│   ├── server/            受信(receiver.ts)、送信(sender.ts)、チャンネル(channels.ts)、「切れた」の判定(presence.ts)、pc の連番(pcSeq.ts)
+│   ├── voice/             音声の受け口と文字起こしの列(service.ts)、文字起こしの呼び出し(transcriber.ts)、WAV の確認(wav.ts)
 │   ├── http/              HTTP API と管理画面の配信(app.ts)、返す JSON の形(views.ts)
 │   ├── mqtt/              ブローカーへの接続と購読(保存が終わってから受け取りの返事を返す)
-│   ├── storage/           保存の窓口(types.ts)と、その実装(memory.ts・mysql.ts)。約束のテストは contract.ts
+│   ├── storage/           保存の窓口(types.ts)と、その実装(memory.ts・mysql.ts)。約束のテストは contract.ts、重複の判定は dedup.ts
 │   └── dev/               サーバーの中で動かす偽の端末(DEV_TOOLS=1 のときだけ)
 ├── web/                   管理画面(やまさん作。素の HTML + JS。web/README.md)
 ├── dist/                  ビルド結果(git 管理外)
 ├── tools/                 疑似端末ツール(fake-device.ts。npm run fake)、負荷の試験(load-test.ts)
-├── data/                  作業用のデータ(git 管理外。DB 本体は Docker のボリューム)
+├── data/                  作業用のデータ(git 管理外。DB 本体は Docker のボリューム)。端末の音声は data/voice/
 └── logs/                  サーバーのログ、実測ログ(git 管理外)
 ```
 
@@ -354,3 +361,4 @@ Re-Ray_Server/
 | 2026-11-06 | §6.1 を「前提(Git・Node.js 24・Docker Desktop を先に入れる)」と「手順」に分けた。入れたあと VS Code を開き直すこと、Docker Desktop の起動、Mac の `cp` を追記 |
 | 2026-11-06 | `GATEWAY_RAW_FORMAT` と `DB案の比較` を追加。`SIGNAL_FORMAT` をプロジェクトの版(方角 `dir`、定型信号の一覧)に合わせ、`dir`・出口の生渡し・統合案で決まった LoRa の下りを各文書に反映 |
 | 2026-11-09 | やまさんの `reray-app`(JavaScript のサーバー + 管理画面)を取り込み、`src/` に一本化した。M2・M3:HTTP API(Fastify)、送信と ack の対応づけ・集計、「切れた」の判定、MySQL 版の保存(B 案の表。`db/init/`)、管理画面(`web/`)、サーバーの中の偽の端末(`DEV_TOOLS`)、負荷の試験(`npm run load-test`)。B 案にあった 了解/できない・SOS の対応済み・LoRa 中で送らなかった印 を【案】で取り込んだ。重なっていた `reray-app/server`(内蔵ブローカー・Docker 構成など)は消した |
+| 2026-11-24 | 端末からの依頼(11/17・11/20)に応えて【案】で追加:チャンネル(1 対 1・グループ、`down/{id}/config` を retain で配る、text に `ch`・`from`・`from_name`、管理画面「チャンネル」)、音声(`POST /api/voice`、自宅サーバーの faster-whisper で文字起こし、チャンネルに配る、管理画面「音声」、`compose.yaml` の `stt`)、重複の判定の見直し(端末の送り直しを 24 時間まで重複とみなす)。DB の追加は `db/init/03_server.sql`(DB 修正依頼の案)。INTERFACES §2.8・§2.9・§4.6 |

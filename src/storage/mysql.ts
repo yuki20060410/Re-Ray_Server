@@ -450,11 +450,13 @@ export class MysqlStorage implements Storage {
     return r ? Number(r.value) : 0;
   }
 
-  async bumpConfigRev(): Promise<number> {
+  async bumpConfigRev(atLeast: number): Promise<number> {
     return this.tx(async (c) => {
       await exec(
         c,
-        "INSERT INTO server_settings (name, value) VALUES ('config_rev', 1) ON DUPLICATE KEY UPDATE value = value + 1",
+        `INSERT INTO server_settings (name, value) VALUES ('config_rev', GREATEST(1, ?))
+           ON DUPLICATE KEY UPDATE value = GREATEST(value + 1, ?)`,
+        [atLeast, atLeast],
       );
       const [r] = await rows<{ value: number }>(c, "SELECT value FROM server_settings WHERE name = 'config_rev'");
       return Number(r?.value ?? 0);

@@ -87,9 +87,16 @@ describe("チャンネル【案】", () => {
     const { storage, channels } = await setup();
     const rev0 = await storage.getConfigRev();
     await channels.ensureDirect("dev-003");
-    assert.equal(await storage.getConfigRev(), rev0 + 1);
+    const rev1 = await storage.getConfigRev();
+    assert.ok(rev1 > rev0);
     await channels.ensureDirect("dev-003"); // 2 回目は作らないので上がらない
-    assert.equal(await storage.getConfigRev(), rev0 + 1);
+    assert.equal(await storage.getConfigRev(), rev1);
+  });
+
+  it("版は今の時刻(UNIX 秒)より小さくならない(DB を作り直しても、端末が覚えている前の版を超える)", async () => {
+    const { storage, channels } = await setup();
+    await channels.createGroup("北班", ["dev-001"]);
+    assert.ok((await storage.getConfigRev()) >= Math.floor(T0 / 1000));
   });
 
   it("全端末への配り直しは、登録した端末だけ", async () => {

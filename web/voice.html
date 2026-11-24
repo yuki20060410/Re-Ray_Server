@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>音声 | Re-Ray 本部</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 2026-11-24 追加【案】: 端末からの依頼 #4。端末が話した声と、文字起こしの結果を見る画面 -->
+  <main>
+    <h1>音声</h1>
+    <p class="muted">端末が話した声です。サーバーが文字にして、宛先のチャンネルに「話した人」付きで配ります。
+      音を聞いて、マイクの音質と文字起こしの結果を見比べられます。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>受けた時刻</th><th>話した人</th><th>チャンネル</th><th>長さ</th><th>状態</th><th>文字にした文</th><th>音</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/mode.js"></script>
+  <script src="js/mock.js"></script>
+  <script src="js/common.js"></script>
+  <script>
+    renderHeader('voice.html');
+
+    const STATUS = {
+      queued: '文字起こし待ち', done: '配った', empty: '声が無い（配らない）', failed: 'あきらめた',
+    };
+
+    // 再生中に書き換わらないよう、変わった行だけ入れ替える
+    const shown = new Map();
+    async function refresh() {
+      if (isMock()) {
+        $('#rows').innerHTML = '<tr><td colspan="7" class="empty">音声は本物のサーバー（npm run dev）で開いたときだけ見られます</td></tr>';
+        return;
+      }
+      const list = await Api.getVoices({ limit: 100 });
+      if (!list.length) {
+        $('#rows').innerHTML = '<tr><td colspan="7" class="empty">まだありません</td></tr>';
+        return;
+      }
+      const rows = $('#rows');
+      if (rows.querySelector('.empty')) rows.innerHTML = '';
+      for (const [i, v] of list.entries()) {
+        const key = `${v.status}|${v.text}|${v.error}|${v.attempts}`;
+        let tr = rows.querySelector(`tr[data-id="${v.id}"]`);
+        if (tr && shown.get(v.id) === key) continue;
+        const html = `
+          <td>${fmtDateTime(v.received_at)}</td>
+          <td>${esc(v.owner || v.device)}</td>
+          <td>${v.ch_name ? `#${esc(v.ch_name)}` : esc(v.ch)}</td>
+          <td>${(v.duration_ms / 1000).toFixed(1)} 秒</td>
+          <td>${esc(STATUS[v.status] || v.status)}${v.attempts > 1 ? `（${v.attempts} 回目）` : ''}
+            ${v.error ? `<br><small class="muted">${esc(v.error)}</small>` : ''}</td>
+          <td>${v.text ? esc(v.text) : '<span class="muted">—</span>'}</td>
+          <td><audio controls preload="none" src="${esc(v.audio_url)}"></audio></td>`;
+        if (tr) {
+          // 音の欄（再生中かもしれない）は残し、ほかの欄だけ入れ替える
+          const audio = tr.lastElementChild;
+          tr.innerHTML = html;
+          tr.replaceChild(audio, tr.lastElementChild);
+        } else {
+          tr = document.createElement('tr');
+          tr.dataset.id = v.id;
+          tr.innerHTML = html;
+          rows.insertBefore(tr, rows.children[i] ?? null);
+        }
+        shown.set(v.id, key);
+      }
+    }
+
+    poll(refresh);
+  </script>
+</body>
+</html>

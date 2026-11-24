@@ -167,6 +167,9 @@ const Wire = (() => {
     },
     sendToChannel: ({ ch, body }) => http('POST', '/messages', { ch: Number(ch), body }),
 
+    // 音声（2026-11-24）。サーバーの形のまま使う（id、device、owner、ch_name、status、text、audio_url …）
+    getVoices: (o = {}) => http('GET', `/voice${query(o)}`),
+
     async sendMessage({ kind, dst_device_id, body, instruction_code, position_id }) {
       const dst = dst_device_id == null ? 'all' : toId(dst_device_id);
       return kind === 'instruction'
@@ -220,6 +223,7 @@ const Api = {
   saveChannel:         (c)      => isMock() ? noMock()                         : Wire.saveChannel(c),
   deleteChannel:       (ch)     => isMock() ? noMock()                         : Wire.deleteChannel(ch),
   sendToChannel:       (m)      => isMock() ? noMock()                         : Wire.sendToChannel(m),
+  getVoices:           (o = {}) => isMock() ? Promise.resolve([])              : Wire.getVoices(o),
 
   getSignalCodes:      ()       => isMock() ? MockServer.getSignalCodes()      : Wire.getSignalCodes(),
   getInstructionCodes: ()       => isMock() ? MockServer.getInstructionCodes() : Wire.getInstructionCodes(),

@@ -562,12 +562,15 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
         assert.deepEqual((await s.getChannel(d.ch))?.members, ["dev-001"]);
       });
 
-      it("設定の版は 0 から始まり、増やすたびに 1 つ増える", async () => {
+      it("設定の版は 0 から始まり、上げるたびに max(今の版 + 1, atLeast) になる", async () => {
         const s = await make();
         assert.equal(await s.getConfigRev(), 0);
-        assert.equal(await s.bumpConfigRev(), 1);
-        assert.equal(await s.bumpConfigRev(), 2);
-        assert.equal(await s.getConfigRev(), 2);
+        assert.equal(await s.bumpConfigRev(0), 1);
+        assert.equal(await s.bumpConfigRev(0), 2);
+        // DB を作り直しても、時刻(UNIX 秒)を下限にすれば前の版より大きくなる
+        assert.equal(await s.bumpConfigRev(1795497433), 1795497433);
+        assert.equal(await s.bumpConfigRev(1795497433), 1795497434);
+        assert.equal(await s.getConfigRev(), 1795497434);
       });
 
       it("文に付けたチャンネルと、言った端末を読み戻せる", async () => {

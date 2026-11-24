@@ -299,8 +299,9 @@ export class MemoryStorage implements Storage {
     return this.configRev;
   }
 
-  async bumpConfigRev(): Promise<number> {
-    return ++this.configRev;
+  async bumpConfigRev(atLeast: number): Promise<number> {
+    this.configRev = Math.max(this.configRev + 1, atLeast);
+    return this.configRev;
   }
 
   // ---- 音声 ----

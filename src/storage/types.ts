@@ -368,8 +368,12 @@ export interface Storage {
   deleteGroupChannel(ch: number): Promise<boolean>;
   /** 端末に配る設定の版。変えるたびに増やす(端末は前より新しいときだけ覚え直す) */
   getConfigRev(): Promise<number>;
-  /** 版を 1 つ増やし、新しい版を返す */
-  bumpConfigRev(): Promise<number>;
+  /**
+   * 版を上げ、新しい版を返す。新しい版 = max(今の版 + 1, atLeast)。
+   * atLeast には今の時刻(UNIX 秒)を渡す(DB を作り直して版が 0 に戻っても、端末やブローカーが覚えている前の版より
+   * 大きくなるように。2026-11-24)
+   */
+  bumpConfigRev(atLeast: number): Promise<number>;
 
   // 音声【案】
   /**

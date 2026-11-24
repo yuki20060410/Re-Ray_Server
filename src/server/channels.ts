@@ -153,15 +153,20 @@ export class ChannelService {
     const existing = (await this.storage.listChannels()).find((c) => c.kind === "direct" && c.members[0] === deviceId);
     if (existing) return existing;
     const c = await this.storage.ensureDirectChannel(deviceId, DIRECT_NAME, this.now());
-    await this.storage.bumpConfigRev();
+    await this.storage.bumpConfigRev(this.revFloor());
     return c;
   }
 
   // ---- 内部 ----
 
+  /** 版の下限 = 今の時刻(UNIX 秒)。DB を作り直しても、前に配った版より小さくならないように */
+  private revFloor(): number {
+    return Math.floor(this.now().getTime() / 1000);
+  }
+
   /** 変わった: 版を上げて、関係する端末に配る */
   private async changed(deviceIds: DeviceId[]): Promise<void> {
-    await this.storage.bumpConfigRev();
+    await this.storage.bumpConfigRev(this.revFloor());
     await this.publishTo(deviceIds);
   }
 

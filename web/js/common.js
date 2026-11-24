@@ -117,6 +117,7 @@ const PAGES = [
   ['broadcast.html', '一斉送信'],
   ['logs.html', '記録'],
   ['channels.html', 'チャンネル'],
+  ['voice.html', '音声'],
   ['positions.html', 'ポジション'],
   ['devices.html', '端末の登録'],
 ];
