@@ -35,7 +35,10 @@ services:
       - mysql-data:/var/lib/mysql
       - ./db/init:/docker-entrypoint-initdb.d:ro   # 初回起動時に .sql を名前の順に流す(db/init/README.md)
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # 2026-11-24: localhost(ソケット)だと、はじめての起動で db/init を流している仮のサーバーにも通ってしまい、
+      #   準備が終わる前にサーバーアプリがつなぎに行って起動し直していた(自宅サーバーで 4 回。端末側の FINDINGS)。
+      #   仮のサーバーはネットワークを開かないので、TCP(127.0.0.1)で確かめる
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
       interval: 5s
       timeout: 3s
       retries: 20
