@@ -18,11 +18,11 @@
       <table>
         <thead>
           <tr>
-            <th>名前</th><th>ポジション</th><th>つながり</th>
+            <th>名前</th><th>モード</th><th>ポジション</th><th>つながり</th>
             <th>経路</th><th>電池</th><th>グラス</th><th>最後の連絡</th>
           </tr>
         </thead>
-        <tbody id="rows"><tr><td colspan="7" class="empty">読み込み中…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="8" class="empty">読み込み中…</td></tr></tbody>
       </table>
     </div>
 
@@ -65,6 +65,7 @@
       const last = d.last_signal;
       return `<tr class="${cls}" data-id="${d.id}">
         <td style="white-space:nowrap"><strong>${esc(ownerOf(d))}</strong><span class="sub">${deviceLabel(d.id)}</span></td>
+        <td>${modeHtml(d.mode)}</td>
         <td>${d.position ? esc(d.position.name) : '<span class="muted">—</span>'}</td>
         <td>${onlineHtml(d)}${!d.is_online && d.last_seen_at ? `<span class="sub">${fmtAgo(d.last_seen_at)}から</span>` : ''}</td>
         <td>${viaHtml(d.via)}</td>
@@ -88,7 +89,7 @@
         stat('', '切れた', devices.length - on) +
         stat(sos ? 'alert' : '', 'SOS 未対応', sos);
       $('#rows').innerHTML = devices.length ? devices.map(row).join('')
-        : '<tr><td colspan="7" class="empty">端末がまだありません</td></tr>';
+        : '<tr><td colspan="8" class="empty">端末がまだありません</td></tr>';
     }
 
     $('#rows').addEventListener('click', (e) => {

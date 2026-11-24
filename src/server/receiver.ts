@@ -4,14 +4,15 @@
 // 1. events に原本を書く → 2. 確かめる(だめなら invalid)→ 3. 重複の判定と保存 →
 // 4. signal なら、重複で捨てた場合も含めて「本部に届いた」を返す
 // 2026-11-06: ack の対応づけ(M3)と、了解・できない(ack_kind 4・5)、範囲外の印を足した
+// 2026-11-24: 重複の判定を見直した(端末の送り直しを 24 時間まで重複とみなす。storage/dedup.ts)
+// 2026-11-24: 出口の生渡し(LoRa のフレーム)を分解して、JSON と同じ処理に回すようにした(lora/decode.ts)
 
+import { decodeGateway } from "../lora/decode.js";
 import { downAckTopic } from "../protocol/topics.js";
 import { MAX_PAYLOAD_BYTES, parseUp, type AckMessage, type SignalMessage, type UpMessage } from "../protocol/validate.js";
+import { DEDUP_RULE } from "../storage/dedup.js";
 import type { AckResponse, EventResult, Storage } from "../storage/types.js";
 import type { PcSeq } from "./pcSeq.js";
-
-/** 重複とみなす範囲(直近 10 分の同じ src + seq。ARCHITECTURE §6) */
-export const DEDUP_WINDOW_MS = 10 * 60 * 1000;
 
 /** ack_seq だけの ack を対応づけるとき、さかのぼる範囲(INTERFACES §2.4 の暫定) */
 export const ACK_SEQ_WINDOW_MS = 10 * 60 * 1000;
@@ -21,6 +22,8 @@ export interface ReceiverDeps {
   /** QoS 1・retain なしで流す。ブローカーが受け取ったら(PUBACK)解決する */
   publish: (topic: string, payload: string) => Promise<void>;
   pcSeq: PcSeq;
+  /** 【案】LoRa のフレームの署名の鍵(RERAY_HMAC_KEY)。無ければ出口の生渡しはすべて invalid(署名を確かめられないため) */
+  loraKey?: Buffer | null;
   now?: () => Date;
   log?: Pick<Console, "info" | "warn" | "error">;
 }
@@ -34,6 +37,7 @@ export class Receiver {
   private readonly storage: Storage;
   private readonly publish: ReceiverDeps["publish"];
   private readonly pcSeq: PcSeq;
+  private readonly loraKey: Buffer | null;
   private readonly now: () => Date;
   private readonly log: NonNullable<ReceiverDeps["log"]>;
   private readonly sending = new Set<Promise<void>>();
@@ -42,6 +46,7 @@ export class Receiver {
     this.storage = deps.storage;
     this.publish = deps.publish;
     this.pcSeq = deps.pcSeq;
+    this.loraKey = deps.loraKey ?? null;
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? console;
   }
@@ -90,7 +95,8 @@ export class Receiver {
             receivedAt,
             outOfRange: isOutOfRange(message),
           },
-          DEDUP_WINDOW_MS,
+          // 重複の決まり(10 分以内、または端末の送り直しは 24 時間まで)は storage/dedup.ts
+          DEDUP_RULE,
         );
         // 重複で捨てた signal にも返す(端末が送り直しをやめられるように。INTERFACES §2.6)
         this.sendHqAck(message.src, message.seq);
@@ -109,9 +115,23 @@ export class Receiver {
         await this.storage.touchDevice(message.src, receivedAt);
         return this.matchAck(message, receivedAt);
       case "gateway":
-        // LoRa のフレームの分解は次に作る(GATEWAY_RAW_FORMAT)。今は原本だけ残す
-        return { result: "ignored", note: "lora decode not yet" };
+        return this.handleGateway(message.gatewayId, message.bytes, receivedAt);
     }
+  }
+
+  /**
+   * 【案】出口の生渡し(GATEWAY_RAW_FORMAT §3。2026-11-24): 署名を確かめて分解し、JSON で届いたものと同じ処理に回す。
+   * 受信時刻は「サーバーの受信時刻 − age_ms」(出口に溜まっていた分も、出口が実際に受けた順に並ぶ)
+   */
+  private async handleGateway(gatewayId: string, bytes: Uint8Array, receivedAt: Date): Promise<HandleOutcome> {
+    if (!this.loraKey) return { result: "invalid", note: "no hmac key (RERAY_HMAC_KEY)" };
+    const d = decodeGateway(bytes, this.loraKey);
+    if (!d.ok) return { result: "invalid", note: `${d.reason} gw=${gatewayId}` };
+    const e = d.envelope;
+    const meta = `gw=${gatewayId} rssi=${e.rssi} snr=${e.snr} age=${e.ageMs}ms`;
+    if (d.kind === "ignored") return { result: "ignored", note: `${d.note} ${meta}` };
+    const inner = await this.dispatch(d.message, new Date(receivedAt.getTime() - e.ageMs));
+    return { ...inner, note: [inner.note, meta].filter(Boolean).join(" ").slice(0, 255) };
   }
 
   /**

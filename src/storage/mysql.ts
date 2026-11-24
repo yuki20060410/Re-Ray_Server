@@ -13,6 +13,7 @@
 
 import mysql, { type Pool, type PoolConnection, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
 import { deviceNumber, formatDeviceId } from "../protocol/topics.js";
+import { type DedupRule, isSameSignal } from "./dedup.js";
 import type {
   AckResponse,
   Channel,
@@ -20,7 +21,10 @@ import type {
   Delivery,
   Device,
   DeviceId,
+  DeviceMode,
+  EventFilter,
   EventId,
+  EventRecord,
   EventResult,
   InstructionCode,
   Message,
@@ -43,6 +47,10 @@ import type {
   Storage,
   Via,
   ViaAtSend,
+  NewVoiceClip,
+  VoiceClip,
+  VoiceFilter,
+  VoiceUpdate,
 } from "./types.js";
 
 /** DB の時刻の時間帯(B 案は日本時間。DB-012 で UTC に決まったら '+00:00' にする) */
@@ -109,9 +117,51 @@ export class MysqlStorage implements Storage {
     ]);
   }
 
+  async listEvents(f: EventFilter): Promise<EventRecord[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (f.results !== undefined) {
+      if (!f.results.length) return [];
+      where.push("result IN (?)");
+      params.push(f.results);
+    }
+    if (f.deviceId !== undefined) {
+      // 端末ID は dev-001 の形に確かめてあるので、LIKE の特別な文字(% _)は入らない
+      where.push("topic LIKE ?");
+      params.push(`%/${f.deviceId}/%`);
+    }
+    if (f.direction !== undefined) {
+      where.push("direction = ?");
+      params.push(f.direction);
+    }
+    params.push(f.limit);
+    const list = await rows<{
+      id: number;
+      at: Date;
+      direction: EventRecord["direction"];
+      topic: string;
+      payload: string;
+      result: EventResult;
+      note: string | null;
+    }>(
+      this.pool,
+      `SELECT * FROM events ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY at DESC, id DESC LIMIT ?`,
+      params,
+    );
+    return list.map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      direction: r.direction,
+      topic: r.topic,
+      payload: r.payload,
+      result: r.result,
+      ...(r.note !== null && { note: r.note }),
+    }));
+  }
+
   // ---- 定型信号 ----
 
-  async recordSignal(signal: NewSignal, windowMs: number): Promise<RecordSignalResult> {
+  async recordSignal(signal: NewSignal, rule: DedupRule): Promise<RecordSignalResult> {
     const no = toNo(signal.deviceId);
     const t = signal.receivedAt.getTime();
     return this.tx(async (c) => {
@@ -124,12 +174,13 @@ export class MysqlStorage implements Storage {
           WHERE d.id = ? FOR UPDATE OF d`,
         [no],
       );
-      const dup = await rows(
+      // 同じ端末・同じ seq の候補(送り直しを見る長さの分)を取り、同じ信号かは dedup.ts で決める
+      const candidates = await rows<SignalRow>(
         c,
-        "SELECT id FROM signals WHERE device_id = ? AND seq = ? AND received_at BETWEEN ? AND ? LIMIT 1",
-        [no, signal.seq, new Date(t - windowMs), new Date(t + windowMs)],
+        "SELECT * FROM signals WHERE device_id = ? AND seq = ? AND received_at BETWEEN ? AND ?",
+        [no, signal.seq, new Date(t - rule.resendWindowMs), new Date(t + rule.resendWindowMs)],
       );
-      if (dup.length) return { kind: "duplicate" } as const;
+      if (candidates.some((r) => isSameSignal(toSignal(r), signal, rule))) return { kind: "duplicate" } as const;
 
       const ins = await exec(
         c,
@@ -229,8 +280,9 @@ export class MysqlStorage implements Storage {
       await exec(
         c,
         `UPDATE devices SET battery = COALESCE(?, battery), has_glass = COALESCE(?, has_glass),
-                via = COALESCE(?, via), lat = COALESCE(?, lat), lon = COALESCE(?, lon) WHERE id = ?`,
-        [u.battery ?? null, u.glass ?? null, u.via ?? null, u.lat ?? null, u.lon ?? null, no],
+                via = COALESCE(?, via), lat = COALESCE(?, lat), lon = COALESCE(?, lon), mode = COALESCE(?, mode)
+          WHERE id = ?`,
+        [u.battery ?? null, u.glass ?? null, u.via ?? null, u.lat ?? null, u.lon ?? null, u.mode ?? null, no],
       );
       await markSeen(c, no, u.receivedAt, wasOnline, u.battery);
     });
@@ -444,15 +496,88 @@ export class MysqlStorage implements Storage {
     return r ? Number(r.value) : 0;
   }
 
-  async bumpConfigRev(): Promise<number> {
+  async bumpConfigRev(atLeast: number): Promise<number> {
     return this.tx(async (c) => {
       await exec(
         c,
-        "INSERT INTO server_settings (name, value) VALUES ('config_rev', 1) ON DUPLICATE KEY UPDATE value = value + 1",
+        `INSERT INTO server_settings (name, value) VALUES ('config_rev', GREATEST(1, ?))
+           ON DUPLICATE KEY UPDATE value = GREATEST(value + 1, ?)`,
+        [atLeast, atLeast],
       );
       const [r] = await rows<{ value: number }>(c, "SELECT value FROM server_settings WHERE name = 'config_rev'");
       return Number(r?.value ?? 0);
     });
+  }
+
+  // ---- 音声【案】(03_server.sql の voice_clips) ----
+
+  async recordVoice(clip: NewVoiceClip, windowMs: number): Promise<{ kind: "saved" | "duplicate"; clip: VoiceClip }> {
+    const no = toNo(clip.deviceId);
+    const t = clip.receivedAt.getTime();
+    const r = await this.tx(async (c) => {
+      // 端末の行に鍵をかけてから重複を調べる(送り直しが同時に届いても 1 件にする。recordSignal と同じ)
+      await lockDevice(c, no, clip.receivedAt);
+      const [dup] = await rows<{ id: number }>(
+        c,
+        "SELECT id FROM voice_clips WHERE device_id = ? AND seq = ? AND received_at BETWEEN ? AND ? ORDER BY id LIMIT 1",
+        [no, clip.seq, new Date(t - windowMs), new Date(t + windowMs)],
+      );
+      if (dup) return { kind: "duplicate" as const, id: Number(dup.id) };
+      const ins = await exec(
+        c,
+        `INSERT INTO voice_clips (device_id, channel_id, seq, duration_ms, bytes, status, received_at)
+         VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
+        [no, clip.ch, clip.seq, clip.durationMs, clip.bytes, clip.receivedAt],
+      );
+      return { kind: "saved" as const, id: ins.insertId };
+    });
+    const saved = await this.getVoice(r.id);
+    if (!saved) throw new Error("記録した音声が読めない");
+    return { kind: r.kind, clip: saved };
+  }
+
+  async updateVoice(id: number, u: VoiceUpdate): Promise<void> {
+    const cols: string[] = [];
+    const params: unknown[] = [];
+    const set = (col: string, v: unknown) => {
+      cols.push(`${col} = ?`);
+      params.push(v);
+    };
+    if (u.status !== undefined) set("status", u.status);
+    if (u.text !== undefined) set("text", u.text);
+    if (u.error !== undefined) set("error", u.error?.slice(0, 255) ?? null);
+    if (u.messageId !== undefined) set("message_id", u.messageId);
+    if (u.attempts !== undefined) set("attempts", u.attempts);
+    if (u.doneAt !== undefined) set("done_at", u.doneAt);
+    if (!cols.length) return;
+    await exec(this.pool, `UPDATE voice_clips SET ${cols.join(", ")} WHERE id = ?`, [...params, id]);
+  }
+
+  async getVoice(id: number): Promise<VoiceClip | null> {
+    const [r] = await rows<VoiceRow>(this.pool, "SELECT * FROM voice_clips WHERE id = ?", [id]);
+    return r ? toVoice(r) : null;
+  }
+
+  async listVoices(f: VoiceFilter): Promise<VoiceClip[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (f.deviceId !== undefined) {
+      where.push("device_id = ?");
+      params.push(toNo(f.deviceId));
+    }
+    if (f.statuses !== undefined) {
+      if (!f.statuses.length) return [];
+      where.push("status IN (?)");
+      params.push(f.statuses);
+    }
+    params.push(f.limit);
+    const list = await rows<VoiceRow>(
+      this.pool,
+      `SELECT * FROM voice_clips ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        ORDER BY received_at DESC, id DESC LIMIT ?`,
+      params,
+    );
+    return list.map(toVoice);
   }
 
   // ---- 本部から送ったもの ----
@@ -737,6 +862,7 @@ interface DeviceRow {
   lon: number | null;
   last_seen_at: Date | null;
   created_at: Date;
+  mode: DeviceMode | null;
 }
 
 function toDevice(r: DeviceRow): Device {
@@ -753,6 +879,7 @@ function toDevice(r: DeviceRow): Device {
     lastSeenAt: r.last_seen_at,
     createdAt: r.created_at,
     registered: Boolean(r.registered),
+    mode: r.mode ?? null,
   };
 }
 
@@ -864,6 +991,40 @@ function toMessage(r: MessageRow): Message {
     publishState: r.publish_state,
     ...(r.channel_id !== null && { ch: r.channel_id }),
     ...(r.from_device_id !== null && { from: formatDeviceId(r.from_device_id) }),
+  };
+}
+
+interface VoiceRow {
+  id: number;
+  device_id: number;
+  channel_id: number;
+  seq: number;
+  duration_ms: number;
+  bytes: number;
+  status: VoiceClip["status"];
+  text: string | null;
+  error: string | null;
+  message_id: number | null;
+  attempts: number;
+  received_at: Date;
+  done_at: Date | null;
+}
+
+function toVoice(r: VoiceRow): VoiceClip {
+  return {
+    id: Number(r.id),
+    deviceId: formatDeviceId(r.device_id),
+    ch: r.channel_id,
+    seq: r.seq,
+    durationMs: r.duration_ms,
+    bytes: r.bytes,
+    receivedAt: r.received_at,
+    status: r.status,
+    text: r.text,
+    error: r.error,
+    messageId: r.message_id === null ? null : Number(r.message_id),
+    attempts: r.attempts,
+    doneAt: r.done_at,
   };
 }
 

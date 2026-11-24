@@ -69,3 +69,35 @@ CREATE TABLE server_settings (
 ALTER TABLE messages
   ADD COLUMN channel_id      SMALLINT UNSIGNED NULL AFTER dst_device_id,
   ADD COLUMN from_device_id  SMALLINT UNSIGNED NULL AFTER channel_id;
+
+-- ---- 音声【案】（端末からの依頼 2026-11-17 の #4。2026-11-24 追加）----
+-- 端末が POST /api/voice で送った音の記録。音のファイルそのものは DB に入れず、サーバーのフォルダー（VOICE_DIR）に置く。
+-- 文字起こしが終わったら、チャンネルの文（messages、kind = transcript）として配り、message_id に結ぶ
+DROP TABLE IF EXISTS voice_clips;
+CREATE TABLE voice_clips (
+  id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  device_id    SMALLINT UNSIGNED NOT NULL,             -- 話した端末
+  channel_id   SMALLINT UNSIGNED NOT NULL,             -- 宛先のチャンネル（消しても番号は残すので外部キーなし）
+  seq          SMALLINT UNSIGNED NOT NULL,             -- 端末の番号（同じ番号がもう一度来たら送り直し）
+  duration_ms  INT UNSIGNED NOT NULL,
+  bytes        INT UNSIGNED NOT NULL,
+  status       ENUM('queued','done','empty','failed') NOT NULL,  -- 文字起こし待ち／配った／声が無かった／あきらめた
+  text         TEXT,                                   -- 文字にした文（切り詰める前）
+  error        VARCHAR(255),
+  message_id   BIGINT UNSIGNED,                        -- 配った messages.id
+  attempts     TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  received_at  DATETIME(3) NOT NULL,
+  done_at      DATETIME(3),
+  INDEX idx_voice_clips_dup (device_id, seq, received_at),
+  INDEX idx_voice_clips_received_at (received_at),
+  CONSTRAINT fk_voice_clips_devices FOREIGN KEY (device_id) REFERENCES devices(id)
+);
+
+-- ---- DB-004 に関係: 本文の上限 ----
+-- 声を文字にした文は 40 文字に収まらない（端末からの依頼 §4.3）。サーバーは文字起こしの文だけ 200 文字まで送る
+-- （src/server/sender.ts の TRANSCRIPT_MAX）。本部が打つ文の上限（40 文字）はグラスの文字数が決まるまで変えない
+ALTER TABLE messages MODIFY body VARCHAR(255);
+
+-- ---- モード【案】（端末からの依頼 2026-11-17 の #5。2026-11-24 追加）----
+-- 端末が status で知らせる 平常時（normal）／緊急時（emergency）。まだ届いていなければ NULL
+ALTER TABLE devices ADD COLUMN mode ENUM('normal','emergency') NULL AFTER has_glass;

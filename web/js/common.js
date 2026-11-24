@@ -38,6 +38,12 @@ function fmtAgo(iso) {
   if (s < 86400) return `${Math.floor(s / 3600)}時間前`;
   return `${Math.floor(s / 86400)}日前`;
 }
+// 2026-11-24: 端末のモード（平常時・緊急時）
+function modeHtml(m) {
+  if (m === 'emergency') return '<span class="tag sos">緊急</span>';
+  if (m === 'normal') return '<span class="tag">平常</span>';
+  return '<span class="muted">—</span>';
+}
 const viaLabel = (v) => ({ wifi: 'Wi-Fi', lora: 'LoRa', offline: '切れている' }[v] || '—');
 
 // ---- 定型信号の数量・方角・時刻（2026-11-13 追加。決まりは docs/SIGNAL_FORMAT §2） ----
@@ -185,6 +191,7 @@ const PAGES = [
   ['broadcast.html', '一斉送信'],
   ['logs.html', '記録'],
   ['channels.html', 'チャンネル'],
+  ['voice.html', '音声'],
   ['positions.html', 'ポジション'],
   ['devices.html', '端末の登録'],
 ];

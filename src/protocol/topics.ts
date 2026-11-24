@@ -34,6 +34,9 @@ export function downAckTopic(deviceId: string): string {
   return `${TOPIC_PREFIX}/down/${deviceId}/ack`;
 }
 
+/** 【案】本部から全端末のモードを切り替えるトピック(端末からの依頼 11/17 #5。2026-11-24) */
+export const DOWN_ALL_MODE = `${TOPIC_PREFIX}/down/all/mode`;
+
 /** 文字・指示コードを流すトピック。dst は端末ID か "all"(一斉) */
 export function downTextTopic(dst: string): string {
   return `${TOPIC_PREFIX}/down/${dst}/text`;

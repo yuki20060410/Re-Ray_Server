@@ -1,12 +1,17 @@
 // HTTP API のテスト(M2・M3)。Fastify の inject で、ブローカーも MySQL も使わずに流す(2026-11-06 作成)
 
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { ChannelService } from "../server/channels.js";
 import { PcSeq } from "../server/pcSeq.js";
 import { Receiver } from "../server/receiver.js";
 import { Sender } from "../server/sender.js";
 import { MemoryStorage } from "../storage/memory.js";
+import { VoiceService } from "../voice/service.js";
+import { makeWav } from "../voice/wav.js";
 import { buildApp } from "./app.js";
 
 const T0 = Date.parse("2026-11-06T05:00:00.000Z"); // 日本時間 14:00
@@ -278,5 +283,93 @@ describe("チャンネルの API【案】", () => {
     const m = (await call("GET", `/api/messages/${get(sent.body, "id")}`)).body;
     assert.deepEqual([get(m, "ch"), get(m, "ch_name"), get(m, "from")], [ch, "北班", null]);
     assert.equal((await call("POST", "/api/messages", { ch: 999, body: "x" })).status, 422);
+  });
+});
+
+describe("音声の API【案】", () => {
+  async function setupVoice() {
+    const storage = new MemoryStorage();
+    const now = () => new Date(T0);
+    const pcSeq = new PcSeq(1);
+    const publish = async () => {};
+    const channels = new ChannelService({ storage, pcSeq, publishRetained: publish, now, log: quiet });
+    const sender = new Sender({ storage, pcSeq, publish, now, log: quiet, channels });
+    const dir = await mkdtemp(join(tmpdir(), "reray-voice-api-"));
+    const voice = new VoiceService({
+      storage, sender, dir, now, log: quiet,
+      transcriber: { label: "テスト", transcribe: async () => "了解しました" },
+    });
+    const app = await buildApp({
+      storage, sender, channels, voice, isMqttConnected: () => true, storageKind: "memory", webDir: null, dev: null, now,
+    });
+    await storage.registerDevice("dev-001", "山田", new Date(T0));
+    const g = await channels.createGroup("北班", ["dev-001"]);
+    const post = (headers: Record<string, string>, payload: Buffer) =>
+      app.inject({ method: "POST", url: "/api/voice", headers, payload });
+    return { app, voice, post, ch: g.ch, dir };
+  }
+
+  it("WAV を受けて 202 {id}。文字起こしのあと、一覧に文字と音の場所が出る", async () => {
+    const { app, voice, post, ch, dir } = await setupVoice();
+    const wav = makeWav(2000);
+    const headers = { "content-type": "audio/wav", "x-device": "dev-001", "x-channel": String(ch), "x-seq": "7" };
+    const res = await post(headers, wav);
+    assert.equal(res.statusCode, 202);
+    const id = (JSON.parse(res.body) as { id: number }).id;
+    // 送り直しは同じ id
+    assert.deepEqual(JSON.parse((await post(headers, wav)).body), { id, duplicate: true });
+
+    await voice.idle();
+    const list = JSON.parse((await app.inject({ method: "GET", url: "/api/voice" })).body) as unknown[];
+    assert.deepEqual(
+      [get(list[0], "id"), get(list[0], "status"), get(list[0], "text"), get(list[0], "ch_name"), get(list[0], "owner")],
+      [id, "done", "了解しました", "北班", "山田"],
+    );
+    const audio = await app.inject({ method: "GET", url: `/api/voice/${id}/audio` });
+    assert.equal(audio.statusCode, 200);
+    assert.equal(audio.headers["content-type"], "audio/wav");
+    assert.equal(audio.rawPayload.length, wav.length);
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("形が違えば断る: Content-Type、大きすぎ、ヘッダ", async () => {
+    const { post, ch, dir } = await setupVoice();
+    const h = { "x-device": "dev-001", "x-channel": String(ch), "x-seq": "1" };
+    assert.equal((await post({ ...h, "content-type": "application/octet-stream" }, makeWav(100))).statusCode, 415);
+    assert.equal((await post({ ...h, "content-type": "audio/wav" }, Buffer.alloc(700 * 1024))).statusCode, 413);
+    assert.equal((await post({ ...h, "content-type": "audio/wav", "x-seq": "x" }, makeWav(100))).statusCode, 400);
+    assert.equal((await post({ ...h, "content-type": "audio/wav", "x-device": "dev-009" }, makeWav(100))).statusCode, 422);
+    await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("モードの API【案】", () => {
+  it("POST /api/mode で全端末に流し、端末の今のモードは /api/devices の mode に出る", async () => {
+    const { call, up, published } = await setup();
+    const r = await call("POST", "/api/mode", { mode: "emergency" });
+    assert.equal(r.status, 201);
+    assert.equal(published.at(-1)?.topic, "reray/v1/down/all/mode");
+    assert.equal((await call("POST", "/api/mode", { mode: "x" })).status, 422);
+
+    await call("POST", "/api/devices", { id: "dev-001", owner: "山田" });
+    await up("status", "dev-001", { mode: "emergency" });
+    const list = (await call("GET", "/api/devices")).body as unknown[];
+    assert.equal(get(list[0], "mode"), "emergency");
+  });
+});
+
+describe("原本の API【案】", () => {
+  it("捨てたもの(invalid)を理由つきで、端末ごとに引ける", async () => {
+    const { call, receiver } = await setup();
+    await receiver.handle("reray/v1/up/dev-001/signal", Buffer.from("{"));
+    await receiver.handle("reray/v1/up/dev-002/signal", Buffer.from(JSON.stringify({ v: 2 })));
+    const r = await call("GET", "/api/events?result=invalid&device=dev-001");
+    assert.equal(r.status, 200);
+    const list = r.body as unknown[];
+    assert.deepEqual(
+      list.map((e) => [get(e, "topic"), get(e, "result"), get(e, "note"), get(e, "payload")]),
+      [["reray/v1/up/dev-001/signal", "invalid", "json", "{"]],
+    );
+    assert.equal((await call("GET", "/api/events?result=nope")).status, 400);
   });
 });

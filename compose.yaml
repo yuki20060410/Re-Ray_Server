@@ -35,7 +35,10 @@ services:
       - mysql-data:/var/lib/mysql
       - ./db/init:/docker-entrypoint-initdb.d:ro   # 初回起動時に .sql を名前の順に流す(db/init/README.md)
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      # 2026-11-24: localhost(ソケット)だと、はじめての起動で db/init を流している仮のサーバーにも通ってしまい、
+      #   準備が終わる前にサーバーアプリがつなぎに行って起動し直していた(自宅サーバーで 4 回。端末側の FINDINGS)。
+      #   仮のサーバーはネットワークを開かないので、TCP(127.0.0.1)で確かめる
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -53,6 +56,11 @@ services:
       DB_PORT: "3306"
       STORAGE: mysql
       HTTP_PORT: "3000"
+      # 音声の置き場所はコンテナの中(消えないようにボリュームに置く)。文字起こしを compose の stt で動かすなら
+      # .env に STT_URL=http://stt:8000 と書く(コンテナの中からはサービス名でつなぐ)
+      VOICE_DIR: /app/data/voice
+    volumes:
+      - voice-data:/app/data/voice
     ports:
       - "${HTTP_PORT:-3000}:3000"   # 管理画面と API(2026-11-06 追加)
     depends_on:
@@ -61,6 +69,21 @@ services:
       mysql:
         condition: service_healthy
 
+  # 文字起こし【案】(2026-11-24。faster-whisper を OpenAI と同じ形の API で出す speaches)
+  #   起動: docker compose --profile stt up -d stt
+  #   はじめての文字起こしのときに、サーバーがモデル(STT_MODEL)を取ってこさせる(数百 MB。数分かかる)
+  #   イメージの版は 2026-11 時点の安定版(0.8.3)。CPU だけで動く版(-cpu)
+  stt:
+    profiles: ["stt"]
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    ports:
+      - "${STT_PORT:-8000}:8000"
+    volumes:
+      - stt-models:/home/ubuntu/.cache/huggingface/hub   # 取ってきたモデル(作り直しても消えない)
+    restart: unless-stopped
+
 volumes:
   mosquitto-data:
   mysql-data:
+  voice-data:
+  stt-models:

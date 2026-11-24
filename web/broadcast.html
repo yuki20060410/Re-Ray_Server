@@ -17,6 +17,18 @@
       <div id="send"></div>
     </section>
 
+    <!-- 2026-11-24 追加【案】: 端末からの依頼 #5。全端末を 平常時 / 緊急時 に切り替える -->
+    <section class="card">
+      <h2>全端末のモードを切り替える</h2>
+      <p class="muted">切り替えると、端末のグラスに「本部から: 緊急モードに切り替えます」と出て、自動で切り替わります。
+        切り替わったかは、端末一覧の「モード」で確かめられます（切れている端末は、つながったときに切り替わります）。</p>
+      <div class="filters">
+        <button class="btn danger" data-mode="emergency">全端末を緊急時にする</button>
+        <button class="btn" data-mode="normal">全端末を平常時に戻す</button>
+        <span id="mode-result" class="muted"></span>
+      </div>
+    </section>
+
     <section class="card">
       <h2>最近送ったもの</h2>
       <div class="table-wrap">
@@ -46,6 +58,14 @@
         </tr>`).join('')
         : '<tr><td colspan="5" class="empty">まだ送っていません</td></tr>';
     }
+
+    document.querySelectorAll('[data-mode]').forEach(btn => btn.addEventListener('click', async () => {
+      const mode = btn.dataset.mode;
+      const label = mode === 'emergency' ? '緊急時' : '平常時';
+      if (!confirm(`全端末を${label}に切り替えますか？`)) return;
+      const ok = await guard(() => Api.setMode(mode));
+      if (ok) $('#mode-result').textContent = `${fmtTime(new Date().toISOString())} に${label}への切り替えを送りました`;
+    }));
 
     guard(() => mountSendForm($('#send'), { deviceId: null, onSent: refresh }));
     poll(refresh);

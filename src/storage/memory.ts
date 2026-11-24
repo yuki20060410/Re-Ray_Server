@@ -5,6 +5,7 @@
 // 2026-11-06: 一覧表・SOS の対応済み・了解/できない・記録の検索を足した(types.ts の変更に合わせた)
 
 import { compareDeviceId } from "../protocol/topics.js";
+import { type DedupRule, isSameSignal } from "./dedup.js";
 import { SEED_INSTRUCTION_CODES, SEED_POSITIONS, SEED_SIGNAL_CODES } from "./seed.js";
 import type {
   AckResponse,
@@ -12,7 +13,9 @@ import type {
   Delivery,
   Device,
   DeviceId,
+  EventFilter,
   EventId,
+  EventRecord,
   EventResult,
   InstructionCode,
   Message,
@@ -32,6 +35,10 @@ import type {
   SignalFilter,
   StatusUpdate,
   Storage,
+  NewVoiceClip,
+  VoiceClip,
+  VoiceFilter,
+  VoiceUpdate,
 } from "./types.js";
 
 interface StoredEvent extends NewEvent {
@@ -63,6 +70,7 @@ export class MemoryStorage implements Storage {
   private readonly channels = new Map<number, Channel>();
   private nextCh = 1;
   private configRev = 0;
+  private readonly voices: VoiceClip[] = [];
 
   constructor(options: MemoryStorageOptions = {}) {
     if (options.seed ?? true) {
@@ -88,17 +96,24 @@ export class MemoryStorage implements Storage {
     if (note !== undefined) event.note = note;
   }
 
+  async listEvents(f: EventFilter): Promise<EventRecord[]> {
+    return this.events
+      .filter(
+        (e) =>
+          (!f.results || f.results.includes(e.result)) &&
+          (f.deviceId === undefined || e.topic.includes(`/${f.deviceId}/`)) &&
+          (f.direction === undefined || e.direction === f.direction),
+      )
+      .sort((a, b) => b.at.getTime() - a.at.getTime() || b.id - a.id)
+      .slice(0, f.limit)
+      .map((e) => ({ ...e }));
+  }
+
   // ---- 定型信号 ----
 
-  async recordSignal(signal: NewSignal, windowMs: number): Promise<RecordSignalResult> {
+  async recordSignal(signal: NewSignal, rule: DedupRule): Promise<RecordSignalResult> {
     const t = signal.receivedAt.getTime();
-    const duplicate = this.signals.some(
-      (s) =>
-        s.deviceId === signal.deviceId &&
-        s.seq === signal.seq &&
-        Math.abs(s.receivedAt.getTime() - t) <= windowMs,
-    );
-    if (duplicate) return { kind: "duplicate" };
+    if (this.signals.some((s) => isSameSignal(s, signal, rule))) return { kind: "duplicate" };
 
     // 端末の「今の値」は、受信時刻がいちばん新しい signal で決める。
     // 出口に溜まっていた古い signal が後から届いても、今の値を巻き戻さない
@@ -169,6 +184,7 @@ export class MemoryStorage implements Storage {
     if (update.via !== undefined) device.via = update.via;
     if (update.lat !== undefined) device.lat = update.lat;
     if (update.lon !== undefined) device.lon = update.lon;
+    if (update.mode !== undefined) device.mode = update.mode;
     this.markSeen(device, update.receivedAt);
   }
 
@@ -299,8 +315,50 @@ export class MemoryStorage implements Storage {
     return this.configRev;
   }
 
-  async bumpConfigRev(): Promise<number> {
-    return ++this.configRev;
+  async bumpConfigRev(atLeast: number): Promise<number> {
+    this.configRev = Math.max(this.configRev + 1, atLeast);
+    return this.configRev;
+  }
+
+  // ---- 音声 ----
+
+  async recordVoice(clip: NewVoiceClip, windowMs: number): Promise<{ kind: "saved" | "duplicate"; clip: VoiceClip }> {
+    const t = clip.receivedAt.getTime();
+    const dup = this.voices.find(
+      (v) => v.deviceId === clip.deviceId && v.seq === clip.seq && Math.abs(v.receivedAt.getTime() - t) <= windowMs,
+    );
+    if (dup) return { kind: "duplicate", clip: { ...dup } };
+    this.ensureDevice(clip.deviceId, clip.receivedAt);
+    const saved: VoiceClip = {
+      ...clip,
+      id: this.voices.length + 1,
+      status: "queued",
+      text: null,
+      error: null,
+      messageId: null,
+      attempts: 0,
+      doneAt: null,
+    };
+    this.voices.push(saved);
+    return { kind: "saved", clip: { ...saved } };
+  }
+
+  async updateVoice(id: number, update: VoiceUpdate): Promise<void> {
+    const v = this.voices[id - 1];
+    if (v) Object.assign(v, update);
+  }
+
+  async getVoice(id: number): Promise<VoiceClip | null> {
+    const v = this.voices[id - 1];
+    return v ? { ...v } : null;
+  }
+
+  async listVoices(f: VoiceFilter): Promise<VoiceClip[]> {
+    return this.voices
+      .filter((v) => (f.deviceId === undefined || v.deviceId === f.deviceId) && (!f.statuses || f.statuses.includes(v.status)))
+      .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime() || b.id - a.id)
+      .slice(0, f.limit)
+      .map((v) => ({ ...v }));
   }
 
   // ---- 本部から送ったもの ----
@@ -412,6 +470,7 @@ export class MemoryStorage implements Storage {
       lastSeenAt: null,
       createdAt: at,
       registered: false,
+      mode: null,
     };
   }
 

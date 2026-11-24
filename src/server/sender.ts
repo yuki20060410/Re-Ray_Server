@@ -9,7 +9,7 @@
 //   `down/{id}/text` で流す(端末からの依頼 #3)。文には ch・from・from_name を付ける。
 //   1 台あての文には、その端末の 1 対 1 のチャンネルの ch を付ける(端末が「本部」に入れられるように)
 
-import { deviceNumber, downTextTopic } from "../protocol/topics.js";
+import { deviceNumber, DOWN_ALL_MODE, downTextTopic } from "../protocol/topics.js";
 import type { Device, DeviceId, Message, MessageSource, MessageTarget, NewMessage, Storage, ViaAtSend } from "../storage/types.js";
 import type { ChannelService } from "./channels.js";
 import type { PcSeq } from "./pcSeq.js";
@@ -22,6 +22,13 @@ export const HQ_NAME = "本部";
  * 数え方は文字(コードポイント)の数。指示コードから作った文にも同じ上限をかける
  */
 export const BODY_MAX = 40;
+
+/**
+ * 【案】文字起こしの文の上限(2026-11-24)。声を文字にした文は 40 文字に収まらない(端末からの依頼 §4.3)。
+ * グラスは長い文をページに分けて出す。端末の受信の入れ物(2048 バイト)に、ほかの項目と一緒に収まる長さ。
+ * DB は messages.body を VARCHAR(255) にする(db/init/03_server.sql)
+ */
+export const TRANSCRIPT_MAX = 200;
 
 /** 送れなかった理由。status は API がそのまま返す(INTERFACES §4.4) */
 export class SendError extends Error {
@@ -79,7 +86,10 @@ export class Sender {
   /** 送る。保存した 1 通(publishState は sent)を返す。だめなら SendError */
   async send(req: SendRequest): Promise<Message> {
     const dst = await this.checkDst(req.dst);
-    const content = req.kind === "free" ? { body: checkBody(req.body), pos: 0 } : await this.orderContent(req.icode, req.pos);
+    const content =
+      req.kind === "free"
+        ? { body: checkBody(req.body, req.source === "transcript" ? TRANSCRIPT_MAX : BODY_MAX), pos: 0, requiresResponse: undefined }
+        : await this.orderContent(req.icode, req.pos);
     const devices = dst === "all" ? await this.storage.listDevices() : [await this.storage.getDevice(dst)];
     const ch = dst !== "all" && this.channels ? (await this.channels.ensureDirect(dst)).ch : undefined;
 
@@ -97,6 +107,7 @@ export class Sender {
       devices.filter((d): d is Device => d !== null),
       // 1 台あて・一斉は、今までどおり 1 回だけ流す
       [dst],
+      content.requiresResponse,
     );
   }
 
@@ -105,7 +116,7 @@ export class Sender {
     const channel = Number.isInteger(req.ch) ? await this.storage.getChannel(req.ch) : null;
     if (!channel) throw new SendError(422, "unknown_channel", "そのチャンネルはありません");
     if (!channel.members.length) throw new SendError(422, "empty_channel", "そのチャンネルには端末が入っていません");
-    const body = checkBody(req.body);
+    const body = checkBody(req.body, req.source === "transcript" ? TRANSCRIPT_MAX : BODY_MAX);
     const devices = (await Promise.all(channel.members.map((id) => this.storage.getDevice(id)))).filter(
       (d): d is Device => d !== null,
     );
@@ -130,7 +141,13 @@ export class Sender {
    * 宛先と送った時の経路を決め、**DB に保存して id(= mid)を得てから**流す。
    * dsts(流す先)が 2 つ以上(チャンネル)なら、1 台ずつ流す。1 つでも流せなければ failed で 503
    */
-  private async saveAndPublish(m: NewMessage, devices: Device[], dsts: (DeviceId | "all")[]): Promise<Message> {
+  private async saveAndPublish(
+    m: NewMessage,
+    devices: Device[],
+    dsts: (DeviceId | "all")[],
+    /** 指示コードの形のとき、了解・できない を求めるか(指示コード表の requires_response) */
+    requiresResponse?: boolean,
+  ): Promise<Message> {
     // 宛先と、送った時の経路(あとで端末の状態が変わっても、当時の分母が残る。INTERFACES §4.1)
     const targets: MessageTarget[] = devices.map((d) => {
       const viaAtSend: ViaAtSend = d.online ? (d.via ?? "wifi") : "offline";
@@ -151,6 +168,8 @@ export class Sender {
         mid: saved.id,
         ts: Math.floor(saved.sentAt.getTime() / 1000),
         ...(saved.icode !== undefined && { icode: saved.icode, pos: saved.pos ?? 0 }),
+        // 【案】了解・できない を求めるか(端末からの依頼 11/20 #1。指示コードの形のときだけ付く)
+        ...(requiresResponse !== undefined && { requires_response: requiresResponse }),
         // 【案】どのチャンネルの文か、だれが言ったか(端末からの依頼 §4.2)
         ...(saved.ch !== undefined && { ch: saved.ch }),
         from: saved.from ?? "pc",
@@ -174,6 +193,29 @@ export class Sender {
     return { ...saved, publishState: "sent" };
   }
 
+  /**
+   * 【案】全端末のモードを切り替える(端末からの依頼 11/17 #5。2026-11-24)。
+   * `down/all/mode` に流す(retain なし。切れていた端末には、永続セッションでつながり直したときに届く)。
+   * 返事(ack)は求めない。端末は切り替えたら status の mode で知らせるので、届いたかは端末一覧で分かる
+   */
+  async sendMode(mode: unknown): Promise<{ seq: number; at: Date }> {
+    if (mode !== "normal" && mode !== "emergency") {
+      throw new SendError(422, "bad_mode", "モードは normal(平常時)か emergency(緊急時)です");
+    }
+    const at = this.now();
+    const seq = this.pcSeq.next();
+    const payload = JSON.stringify({ v: 1, type: "mode", src: "pc", dst: "all", seq, ts: Math.floor(at.getTime() / 1000), mode });
+    try {
+      await this.publish(DOWN_ALL_MODE, payload);
+    } catch (err) {
+      await this.storage.saveEvent({ at, direction: "down", topic: DOWN_ALL_MODE, payload, result: "failed", note: String(err).slice(0, 255) });
+      throw new SendError(503, "mqtt_unavailable", "ブローカーにつながっていないので切り替えられませんでした");
+    }
+    await this.storage.saveEvent({ at, direction: "down", topic: DOWN_ALL_MODE, payload, result: "sent" });
+    this.log.info(`${DOWN_ALL_MODE} → ${mode}`);
+    return { seq, at };
+  }
+
   /** 宛先は "all" か、登録した端末(INTERFACES §4.1: 登録されていない端末ID は 422) */
   private async checkDst(dst: string): Promise<DeviceId | "all"> {
     if (dst === "all") return "all";
@@ -186,12 +228,16 @@ export class Sender {
   }
 
   /** 指示コードの形: 指示コード表とポジション表から文を作る */
-  private async orderContent(icode: number, pos: number): Promise<{ body: string; pos: number }> {
+  private async orderContent(
+    icode: number,
+    pos: number,
+  ): Promise<{ body: string; pos: number; requiresResponse: boolean }> {
     const code = Number.isInteger(icode)
       ? (await this.storage.listInstructionCodes()).find((c) => c.code === icode)
       : undefined;
     if (!code) throw new SendError(422, "unknown_icode", "指示コードが一覧にありません");
-    if (!code.usesPosition) return { body: checkBody(code.textWithoutPos ?? code.name), pos: 0 };
+    const requiresResponse = code.requiresResponse;
+    if (!code.usesPosition) return { body: checkBody(code.textWithoutPos ?? code.name), pos: 0, requiresResponse };
 
     // ポジションは表に無くても送れる(番号のまま。INTERFACES §4.1)
     if (!Number.isInteger(pos) || pos < 1 || pos > 255) {
@@ -199,13 +245,13 @@ export class Sender {
     }
     const p = (await this.storage.listPositions()).find((x) => x.no === pos);
     const text = (code.textWithPos ?? "{ポジション名}").replace("{ポジション名}", p?.name ?? `ポジション${pos}`);
-    return { body: checkBody(text), pos };
+    return { body: checkBody(text), pos, requiresResponse };
   }
 }
 
-function checkBody(body: unknown): string {
+function checkBody(body: unknown, max = BODY_MAX): string {
   const text = typeof body === "string" ? body.trim() : "";
   if (!text) throw new SendError(422, "empty_body", "本文を入れてください");
-  if ([...text].length > BODY_MAX) throw new SendError(422, "body_too_long", `本文は${BODY_MAX}文字までです`);
+  if ([...text].length > max) throw new SendError(422, "body_too_long", `本文は${max}文字までです`);
   return text;
 }

@@ -75,6 +75,21 @@ describe("送信", () => {
     assert.deepEqual((await storage.getDeliveries(m.id)).map((d) => [d.viaAtSend, d.skipped]), [["lora", false]]);
   });
 
+  it("指示には requires_response(了解・できない を求めるか)が付く。自由な文には付かない(2026-11-24)", async () => {
+    const { storage, sender, published } = await setup();
+    await storage.createInstructionCode({
+      code: 50, name: "連絡", usesPosition: false, textWithPos: null, textWithoutPos: "本部に連絡してください",
+      requiresResponse: false, strength: null,
+    });
+    await sender.send({ dst: "all", kind: "order", icode: 3, pos: 0 }); // 一覧の仮の中身は、求める
+    await sender.send({ dst: "all", kind: "order", icode: 50, pos: 0 });
+    await sender.send({ dst: "all", kind: "free", body: "x" });
+    assert.deepEqual(
+      published.map((p) => p.body.requires_response),
+      [true, false, undefined],
+    );
+  });
+
   it("ポジションを使わない指示は pos = 0。表に無いポジションは番号のまま文にする", async () => {
     const { sender, published } = await setup();
     await sender.send({ dst: "all", kind: "order", icode: 3, pos: 9 });
@@ -118,6 +133,22 @@ describe("送信", () => {
     const [m] = await storage.listMessages({ limit: 1 });
     assert.equal(m?.publishState, "failed");
     assert.equal(storage.events.at(-1)?.result, "failed");
+  });
+});
+
+describe("モードの一斉切り替え【案】", () => {
+  it("down/all/mode に流す。形の違うモードは 422、流せなければ 503", async () => {
+    const ok = await setup();
+    await ok.sender.sendMode("emergency");
+    assert.deepEqual(
+      [ok.published[0]?.topic, ok.published[0]?.body.type, ok.published[0]?.body.mode, ok.published[0]?.body.dst],
+      ["reray/v1/down/all/mode", "mode", "emergency", "all"],
+    );
+    await rejects(ok.sender.sendMode("panic"), 422, "bad_mode");
+
+    const ng = await setup({ failPublish: true });
+    await rejects(ng.sender.sendMode("normal"), 503, "mqtt_unavailable");
+    assert.equal(ng.storage.events.at(-1)?.result, "failed");
   });
 });
 

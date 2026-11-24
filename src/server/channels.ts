@@ -100,11 +100,27 @@ export class ChannelService {
   /** その端末に配る設定(1 対 1 を先頭に、あとは番号の順)。1 対 1 が無ければ作る */
   async configFor(deviceId: DeviceId): Promise<DeviceConfig> {
     await this.ensureDirect(deviceId);
-    const [rev, all] = await Promise.all([this.storage.getConfigRev(), this.storage.listChannels()]);
+    const [rev, all, positions] = await Promise.all([
+      this.storage.getConfigRev(),
+      this.storage.listChannels(),
+      this.storage.listPositions(),
+    ]);
     const mine = all
       .filter((c) => c.members.includes(deviceId))
       .sort((a, b) => (a.kind === b.kind ? a.ch - b.ch : a.kind === "direct" ? -1 : 1));
-    return { rev, channels: mine.map((c) => ({ ch: c.ch, kind: c.kind, name: c.name })) };
+    return {
+      rev,
+      channels: mine.map((c) => ({ ch: c.ch, kind: c.kind, name: c.name })),
+      positions: positions.map((p) => ({ pos: p.no, name: p.name })),
+    };
+  }
+
+  /**
+   * 【案】ポジションの表を変えたとき(端末からの依頼 11/17 #7。2026-11-24): 版を上げて、登録した全端末に配り直す
+   */
+  async positionsChanged(): Promise<void> {
+    await this.storage.bumpConfigRev(this.revFloor());
+    await this.publishAll();
   }
 
   /** 登録した全端末に配り直す(サーバーがブローカーにつながるたびに呼ぶ) */
@@ -120,19 +136,34 @@ export class ChannelService {
       if (!device?.registered) continue; // 登録していない端末には配らない(送る先にもならないため)
       const config = await this.configFor(id);
       const at = this.now();
-      const payload = JSON.stringify({
-        v: 1,
-        type: "config",
-        src: "pc",
-        dst: id,
-        seq: this.pcSeq.next(),
-        ts: Math.floor(at.getTime() / 1000),
-        rev: config.rev,
-        channels: config.channels,
-      });
+      const seq = this.pcSeq.next();
+      const build = (positions: DeviceConfig["positions"], more: boolean) =>
+        JSON.stringify({
+          v: 1,
+          type: "config",
+          src: "pc",
+          dst: id,
+          seq,
+          ts: Math.floor(at.getTime() / 1000),
+          rev: config.rev,
+          channels: config.channels,
+          positions,
+          ...(more && { positions_more: true }),
+        });
+      // 端末の都合で 1,500 バイトまで。ポジションが多ければ、番号の大きい方から削って収める
+      // (削ったら positions_more: true。端末は一覧に無い番号を「ポジション 12」のように出す)
+      let shown = config.positions.length;
+      let payload = build(config.positions, false);
+      while (Buffer.byteLength(payload) > CONFIG_BYTES_MAX && shown > 0) {
+        shown--;
+        payload = build(config.positions.slice(0, shown), true);
+      }
       if (Buffer.byteLength(payload) > CONFIG_BYTES_MAX) {
         this.log.error(`設定が大きすぎて配れない(${id}、${Buffer.byteLength(payload)} バイト)`);
         continue;
+      }
+      if (shown < config.positions.length) {
+        this.log.warn(`設定に入りきらないポジションがある(${id}: ${config.positions.length} 個のうち ${shown} 個)`);
       }
       const topic = configTopic(id);
       try {
@@ -153,15 +184,20 @@ export class ChannelService {
     const existing = (await this.storage.listChannels()).find((c) => c.kind === "direct" && c.members[0] === deviceId);
     if (existing) return existing;
     const c = await this.storage.ensureDirectChannel(deviceId, DIRECT_NAME, this.now());
-    await this.storage.bumpConfigRev();
+    await this.storage.bumpConfigRev(this.revFloor());
     return c;
   }
 
   // ---- 内部 ----
 
+  /** 版の下限 = 今の時刻(UNIX 秒)。DB を作り直しても、前に配った版より小さくならないように */
+  private revFloor(): number {
+    return Math.floor(this.now().getTime() / 1000);
+  }
+
   /** 変わった: 版を上げて、関係する端末に配る */
   private async changed(deviceIds: DeviceId[]): Promise<void> {
-    await this.storage.bumpConfigRev();
+    await this.storage.bumpConfigRev(this.revFloor());
     await this.publishTo(deviceIds);
   }
 
@@ -196,6 +232,8 @@ export class ChannelService {
 export interface DeviceConfig {
   rev: number;
   channels: { ch: number; kind: Channel["kind"]; name: string }[];
+  /** 【案】ポジションの番号と名前(端末からの依頼 11/17 #7。2026-11-24) */
+  positions: { pos: number; name: string }[];
 }
 
 function checkName(name: unknown): string {

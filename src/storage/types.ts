@@ -14,10 +14,14 @@
 // 2026-11-06: reray-app(B 案の表で作られた試作)から取り込むため、次を足した
 //   一覧表(ポジション・定型信号・指示コード)、SOS の対応済み、了解/できない、LoRa 中で送らなかった印、
 //   記録の検索、「切れた」の理由
-// 2026-11-24: チャンネル(端末からの依頼 #1〜3)と、文の ch・from を足した
+// 2026-11-24: チャンネル(端末からの依頼 #1〜3)と、文の ch・from、音声(#4)を足した
+
+import type { DedupRule } from "./dedup.js";
 
 export type DeviceId = string;
 export type Via = "wifi" | "lora";
+/** 【案】平常時(トランシーバーとして使う)/ 緊急時(定型信号と SOS)。端末からの依頼 11/17 #5 */
+export type DeviceMode = "normal" | "emergency";
 
 // ---- 原本(events) ----
 
@@ -47,6 +51,20 @@ export interface NewEvent {
 
 export type EventId = number;
 
+export interface EventRecord extends NewEvent {
+  id: EventId;
+}
+
+/** 【案】原本の検索(端末からの依頼 11/20 #5: 捨てた理由を見られるように。2026-11-24) */
+export interface EventFilter {
+  /** この結果のものだけ(例: invalid・unmatched) */
+  results?: EventResult[];
+  /** この端末のトピック(`/{id}/` を含むもの)だけ */
+  deviceId?: DeviceId;
+  direction?: EventDirection;
+  limit: number;
+}
+
 // ---- 端末(devices) ----
 
 export interface Device {
@@ -64,6 +82,8 @@ export interface Device {
   createdAt: Date;
   /** true = 管理画面で登録した。false = 受信して初めて見つけた(owner は空) */
   registered: boolean;
+  /** 【案】端末が最後に知らせたモード。まだ届いていなければ null(2026-11-24) */
+  mode: DeviceMode | null;
 }
 
 /** status で届いた値。項目が無いもの(undefined)は前の値のまま */
@@ -75,6 +95,7 @@ export interface StatusUpdate {
   via?: Via;
   lat?: number;
   lon?: number;
+  mode?: DeviceMode;
 }
 
 /** 「切れた」の理由(B 案の device_events.kind) */
@@ -186,6 +207,43 @@ export interface Channel {
   createdAt: Date;
 }
 
+// ---- 音声【案】(端末からの依頼 2026-11-17 の #4) ----
+
+/** queued = 文字起こし待ち、done = 文字にして配った、empty = 声が無かった(配らない)、failed = あきらめた */
+export type VoiceStatus = "queued" | "done" | "empty" | "failed";
+
+export interface NewVoiceClip {
+  deviceId: DeviceId;
+  /** 宛先のチャンネル */
+  ch: number;
+  /** 端末の番号(同じ番号がもう一度来たら送り直し) */
+  seq: number;
+  durationMs: number;
+  bytes: number;
+  receivedAt: Date;
+}
+
+export interface VoiceClip extends NewVoiceClip {
+  id: number;
+  status: VoiceStatus;
+  /** 文字にした文(配る前、切り詰める前のもの) */
+  text: string | null;
+  error: string | null;
+  /** 配った messages.id */
+  messageId: number | null;
+  /** 文字起こしを試した回数 */
+  attempts: number;
+  doneAt: Date | null;
+}
+
+export type VoiceUpdate = Partial<Pick<VoiceClip, "status" | "text" | "error" | "messageId" | "attempts" | "doneAt">>;
+
+export interface VoiceFilter {
+  deviceId?: DeviceId;
+  statuses?: VoiceStatus[];
+  limit: number;
+}
+
 // ---- 本部から送ったもの(messages)と宛先(message_targets) ----
 
 export type MessageKind = "free" | "order";
@@ -260,15 +318,17 @@ export interface Storage {
   saveEvent(event: NewEvent): Promise<EventId>;
   /** 解釈が終わったら結果を書く */
   setEventResult(id: EventId, result: EventResult, note?: string): Promise<void>;
+  /** 【案】原本を新しい順に引く(2026-11-24) */
+  listEvents(filter: EventFilter): Promise<EventRecord[]>;
 
   // 定型信号
   /**
    * 重複でなければ signal を保存し、端末の行も更新する(無ければ registered = false で作る)。
-   * 重複 = 同じ端末・同じ seq の signal が、受信時刻の前後 windowMs 以内にある。
+   * 重複かどうかは dedup.ts の isSameSignal(rule)で決める(2026-11-24 見直し。端末の送り直しを 24 時間まで重複とみなす)。
    * **判定と保存は一続きにする**(Wi-Fi と LoRa から同時に届いても 1 件にする。DB-007・DB-017)。
    * 先に届いた方を残し、後から届いた方は何も変えない。
    */
-  recordSignal(signal: NewSignal, windowMs: number): Promise<RecordSignalResult>;
+  recordSignal(signal: NewSignal, rule: DedupRule): Promise<RecordSignalResult>;
   /** 端末の最新の signal(受信時刻がいちばん新しいもの) */
   getLastSignal(deviceId: DeviceId): Promise<Signal | null>;
   /** 何台ぶんかの最新の signal をまとめて(端末一覧用)。signal の無い端末は入らない */
@@ -329,8 +389,23 @@ export interface Storage {
   deleteGroupChannel(ch: number): Promise<boolean>;
   /** 端末に配る設定の版。変えるたびに増やす(端末は前より新しいときだけ覚え直す) */
   getConfigRev(): Promise<number>;
-  /** 版を 1 つ増やし、新しい版を返す */
-  bumpConfigRev(): Promise<number>;
+  /**
+   * 版を上げ、新しい版を返す。新しい版 = max(今の版 + 1, atLeast)。
+   * atLeast には今の時刻(UNIX 秒)を渡す(DB を作り直して版が 0 に戻っても、端末やブローカーが覚えている前の版より
+   * 大きくなるように。2026-11-24)
+   */
+  bumpConfigRev(atLeast: number): Promise<number>;
+
+  // 音声【案】
+  /**
+   * 重複でなければ記録する(status = queued)。重複 = 同じ端末・同じ seq が受信時刻の前後 windowMs 以内にある。
+   * 重複なら、前に記録したものを返す(端末の送り直しに同じ id を返すため)。判定と記録は一続きにする
+   */
+  recordVoice(clip: NewVoiceClip, windowMs: number): Promise<{ kind: "saved" | "duplicate"; clip: VoiceClip }>;
+  updateVoice(id: number, update: VoiceUpdate): Promise<void>;
+  getVoice(id: number): Promise<VoiceClip | null>;
+  /** 新しい順 */
+  listVoices(filter: VoiceFilter): Promise<VoiceClip[]>;
 
   // 本部から送ったもの
   /** 送る前に呼ぶ。messages と宛先を一続きに書き、id(= mid)を返す。宛先の端末が無ければ作る */

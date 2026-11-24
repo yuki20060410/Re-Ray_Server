@@ -10,15 +10,19 @@
 //   npm run fake -- raw    --topic reray/v1/up/dev-001/signal --payload "{"   形の崩れたものを送る
 //   npm run fake -- listen --id dev-001                              下り(text・本部に届いた)を表示し続ける
 //   npm run fake -- listen --id dev-001 --ack 3                      届いた text に ack(ack_mid)を返す(4 = 了解、5 = できない)
+//   npm run fake -- voice  --id dev-001 --ch 3 --file 録音.wav       音声を POST /api/voice で送り、文字になって届くのを待つ
+//   npm run fake -- voice  --id dev-001 --ch 3 --sec 3               --file が無ければ 3 秒の音(ピー)を作って送る
 //
 // 2026-11-06: listen に --ack を足した(M3 の届き具合を手で確かめるため)
+// 2026-11-24: voice を足した(音声【案】。サーバーの場所は --http、無ければ http://localhost:HTTP_PORT)
 //
 // 端末と同じく、クライアントID = 端末ID、永続セッション、keepalive 30 秒でつなぐ(DATAFLOW §8.3)。
 // seq を指定しなければ、端末と同じく乱数から始める(修正案 #3)。
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import mqtt, { type MqttClient } from "mqtt";
+import { makeWav } from "../src/voice/wav.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 const URL = process.env.MQTT_URL || "mqtt://localhost:1883";
@@ -41,6 +45,10 @@ const { positionals, values } = parseArgs({
     payload: { type: "string" },
     wait: { type: "string", default: "5" },
     ack: { type: "string" },
+    ch: { type: "string" },
+    file: { type: "string" },
+    sec: { type: "string", default: "3" },
+    http: { type: "string" },
   },
 });
 
@@ -173,8 +181,40 @@ async function main(): Promise<void> {
       console.log(`下りを待っています(${id})。Ctrl+C で止める`);
       break;
     }
+    case "voice": {
+      if (!values.ch) throw new Error("--ch(宛先のチャンネルの番号)が要ります");
+      const base = values.http ?? `http://localhost:${process.env.HTTP_PORT || 3000}`;
+      const wav = values.file ? readFileSync(values.file) : makeWav(Number(values.sec) * 1000, 16000, 440);
+      // 文字になった文は、チャンネルの文(text)として自分にも届く。先に聞いておく
+      const client = await connect();
+      await listenDown(client);
+      let transcript: string | null = null;
+      client.on("message", (topic, payload) => {
+        const body = JSON.parse(payload.toString("utf8")) as { type?: string; ch?: number; from?: string; body?: string };
+        if (body.type === "text" && body.ch === Number(values.ch) && body.from === id) transcript = body.body ?? "";
+      });
+
+      const seq = num(values.seq) ?? Math.floor(Math.random() * 65536);
+      const res = await fetch(`${base}/api/voice`, {
+        method: "POST",
+        headers: { "Content-Type": "audio/wav", "X-Device": id, "X-Channel": values.ch, "X-Seq": String(seq) },
+        body: new Uint8Array(wav),
+      });
+      console.log(`→ POST /api/voice(${(wav.length / 1024).toFixed(0)}KB、seq ${seq})← ${res.status} ${await res.text()}`);
+      if (res.status !== 202) {
+        await client.endAsync();
+        process.exitCode = 1;
+        break;
+      }
+      // CPU だけの文字起こしは数十秒かかることがある
+      const ok = await waitFor(() => transcript !== null, Math.max(Number(values.wait), 60));
+      console.log(ok ? `文字になって届いた: ${transcript}` : "文字になった文がまだ届かない(管理画面の「音声」で状態を見る)");
+      await client.endAsync();
+      process.exitCode = ok ? 0 : 1;
+      break;
+    }
     default:
-      console.log("使い方は tools/fake-device.ts の先頭を見てください(signal / status / will / raw / listen)");
+      console.log("使い方は tools/fake-device.ts の先頭を見てください(signal / status / will / raw / listen / voice)");
       process.exitCode = 2;
   }
 }

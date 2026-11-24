@@ -6,12 +6,15 @@
 // 2026-11-06 作成(reray-app の server.js の API を、INTERFACES の形に合わせて取り込んだ)
 
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { deviceNumber } from "../protocol/topics.js";
 import { ChannelError, type ChannelService } from "../server/channels.js";
+import { VoiceError, type VoiceService } from "../voice/service.js";
+import { VOICE_MAX_BYTES } from "../voice/wav.js";
 import { BODY_MAX, SendError, type Sender } from "../server/sender.js";
-import type { InstructionCode, PositionInput, Storage, Via } from "../storage/types.js";
+import type { EventResult, InstructionCode, PositionInput, Storage, Via } from "../storage/types.js";
 import {
   channelView,
   deviceView,
@@ -21,6 +24,7 @@ import {
   positionView,
   signalCodeView,
   signalView,
+  voiceView,
   type Refs,
 } from "./views.js";
 
@@ -44,6 +48,8 @@ export interface AppDeps {
   dev: DevTools | null;
   /** 【案】チャンネル(2026-11-24)。無ければチャンネルの API は 404 */
   channels?: ChannelService | null;
+  /** 【案】音声(2026-11-24)。無ければ音声の API は 404 */
+  voice?: VoiceService | null;
   now?: () => Date;
   logger?: boolean;
 }
@@ -123,10 +129,14 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   // ---- エラーの形 ----
 
   app.setErrorHandler((err: unknown, _req, reply: FastifyReply) => {
-    if (err instanceof ApiError || err instanceof SendError || err instanceof ChannelError) {
+    if (err instanceof ApiError || err instanceof SendError || err instanceof ChannelError || err instanceof VoiceError) {
       return reply.status(err.status).send({ error: err.code, message: err.message });
     }
     const status = (err as { statusCode?: number }).statusCode;
+    if (status === 413) return reply.status(413).send({ error: "too_large", message: "送られてきた中身が大きすぎます" });
+    if (status === 415) {
+      return reply.status(415).send({ error: "unsupported_type", message: "Content-Type が違います(音声は audio/wav)" });
+    }
     if (status && status >= 400 && status < 500) {
       return reply.status(status).send({ error: "bad_request", message: "送られてきた中身が読めません(JSON の形を確かめてください)" });
     }
@@ -182,20 +192,31 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const p = positionParam(req.body?.no, req.body ?? {});
     const saved = await storage.createPosition(p, now());
     if (!saved) invalid(`ポジション ${p.no} はもうあります`, "duplicate_position");
+    positionsChanged();
     return reply.status(201).send(positionView(saved!));
   });
 
   app.put<{ Params: { no: string }; Body: Record<string, unknown> }>("/api/positions/:no", async (req) => {
     const p = positionParam(req.params.no, req.body ?? {});
     const saved = await storage.updatePosition(p, now());
+    if (saved) positionsChanged();
     return saved ? positionView(saved) : notFound(`ポジション ${p.no} はありません`);
   });
 
   app.delete<{ Params: { no: string } }>("/api/positions/:no", async (req, reply) => {
     const no = intParam(req.params.no, 1, 255, "ポジションの番号は 1〜255 です");
     if (!(await storage.deletePosition(no))) notFound(`ポジション ${no} はありません`);
+    positionsChanged();
     return reply.status(204).send();
   });
+
+  /**
+   * 【案】ポジションを変えたら、端末に配る設定(config)にも反映する(端末からの依頼 11/17 #7。2026-11-24)。
+   * 全端末に配るので、終わるのを待たずに返事をする(配れなかった分は、つなぎ直したときに配り直す)
+   */
+  function positionsChanged(): void {
+    deps.channels?.positionsChanged().catch((err: unknown) => console.error("ポジションの変更を端末に配れなかった", err));
+  }
 
   // ---- 定型信号・指示コードの一覧【案】 ----
 
@@ -248,6 +269,61 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     const id = deviceIdParam(req.params.id);
     if (!(await storage.getDevice(id))?.registered) notFound(`${id} は登録されていません`);
     return channelsOrNotFound().configFor(id);
+  });
+
+  // ---- モード【案】(端末からの依頼 #5。2026-11-24) ----
+  // 本部から全端末を 平常時 / 緊急時 に切り替える。各端末の今のモードは /api/devices の mode
+
+  app.post<{ Body: Record<string, unknown> }>("/api/mode", async (req, reply) => {
+    const r = await sender.sendMode(req.body?.mode);
+    return reply.status(201).send({ mode: req.body?.mode, seq: r.seq, sent_at: iso(r.at) });
+  });
+
+  // ---- 音声【案】(端末からの依頼 #4。2026-11-24) ----
+  // 端末: POST /api/voice、Content-Type: audio/wav、X-Device・X-Channel・X-Seq。本体は WAV(16 秒・600KB まで)
+  // 受け取ったらすぐ 202 {id}。文字起こしはこのあとで行い、終わったらチャンネルに配る
+
+  app.addContentTypeParser(
+    ["audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"],
+    { parseAs: "buffer", bodyLimit: VOICE_MAX_BYTES },
+    (_req, body, done) => done(null, body),
+  );
+
+  const voiceOrNotFound = (): VoiceService => deps.voice ?? notFound("音声は使えません");
+
+  app.post("/api/voice", async (req, reply) => {
+    const voice = voiceOrNotFound();
+    if (!Buffer.isBuffer(req.body)) {
+      throw new ApiError(415, "unsupported_type", "Content-Type: audio/wav で WAV を送ってください");
+    }
+    const r = await voice.accept({
+      device: req.headers["x-device"],
+      ch: req.headers["x-channel"],
+      seq: req.headers["x-seq"],
+      wav: req.body,
+    });
+    return reply.status(202).send({ id: r.id, duplicate: r.duplicate });
+  });
+
+  app.get<{ Querystring: { limit?: string; device?: string } }>("/api/voice", async (req) => {
+    voiceOrNotFound();
+    const limit = limitParam(req.query.limit, 50, 500);
+    const deviceId = req.query.device ? deviceIdParam(req.query.device) : undefined;
+    const r = await refs();
+    return (await storage.listVoices({ limit, ...(deviceId && { deviceId }) })).map((v) => voiceView(r, v));
+  });
+
+  // 音そのもの(管理画面で聞いて、マイクの音質や文字起こしの結果を確かめる用)
+  app.get<{ Params: { id: string } }>("/api/voice/:id/audio", async (req, reply) => {
+    const voice = voiceOrNotFound();
+    const id = intParam(req.params.id, 1, Number.MAX_SAFE_INTEGER, "番号が正しくありません");
+    if (!(await storage.getVoice(id))) notFound("その音声はありません");
+    try {
+      const wav = await readFile(voice.audioPath(id));
+      return reply.type("audio/wav").header("Cache-Control", "no-store").send(wav);
+    } catch {
+      return notFound("音声のファイルがありません");
+    }
   });
 
   // ---- 送る(W3・W4。M3) ----
@@ -322,6 +398,33 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     }
     // 時刻の文字列は同じ時間帯・同じ桁なので、文字の順 = 時刻の順
     return items.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")).slice(0, limit);
+  });
+
+  // ---- 原本【案】(端末からの依頼 11/20 #5: 端末から届いて捨てたものの理由を見られるように。2026-11-24) ----
+  // result: カンマ区切り(例 invalid,unmatched)。device: その端末のトピックだけ。direction: up / down。新しい順
+
+  app.get<{ Querystring: Record<string, string | undefined> }>("/api/events", async (req) => {
+    const q = req.query;
+    const results = q.result ? q.result.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+    const known = ["pending", "accepted", "duplicate", "invalid", "unmatched", "ignored", "sent", "failed"];
+    if (results?.some((r) => !known.includes(r))) bad(`result は ${known.join("・")} のどれかです`);
+    if (q.direction && q.direction !== "up" && q.direction !== "down") bad("direction は up か down です");
+    const list = await storage.listEvents({
+      limit: limitParam(q.limit, 100, LOG_LIMIT_MAX),
+      ...(results && { results: results as EventResult[] }),
+      ...(q.device && { deviceId: deviceIdParam(q.device) }),
+      ...(q.direction && { direction: q.direction as "up" | "down" }),
+    });
+    return list.map((e) => ({
+      id: e.id,
+      at: iso(e.at),
+      direction: e.direction,
+      topic: e.topic,
+      result: e.result,
+      note: e.note ?? null,
+      // 本文は長いことがあるので 1,000 文字で切る(バイナリは 16 進)
+      payload: e.payload.length > 1000 ? `${e.payload.slice(0, 1000)}…` : e.payload,
+    }));
   });
 
   // ---- SOS(どの画面でも知らせる)【案】 ----

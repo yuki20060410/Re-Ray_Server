@@ -100,6 +100,12 @@ describe("status と遺言", () => {
     assert.equal(reason(topic, { v: 1, type: "status", src: "dev-001", seq: 1, battery: 101 }), "battery");
   });
 
+  it("mode は normal / emergency だけ(2026-11-24)", () => {
+    const r = parseUp(topic, json({ v: 1, type: "status", src: "dev-001", seq: 1, mode: "emergency" }));
+    assert.ok(r.ok && r.message.type === "status" && r.message.mode === "emergency");
+    assert.equal(reason(topic, { v: 1, type: "status", src: "dev-001", seq: 1, mode: "panic" }), "mode");
+  });
+
   it("遺言は seq と ts が無くても受け付ける", () => {
     const r = parseUp(topic, json({ v: 1, type: "status", src: "dev-001", online: false }));
     assert.ok(r.ok);

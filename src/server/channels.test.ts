@@ -87,9 +87,16 @@ describe("チャンネル【案】", () => {
     const { storage, channels } = await setup();
     const rev0 = await storage.getConfigRev();
     await channels.ensureDirect("dev-003");
-    assert.equal(await storage.getConfigRev(), rev0 + 1);
+    const rev1 = await storage.getConfigRev();
+    assert.ok(rev1 > rev0);
     await channels.ensureDirect("dev-003"); // 2 回目は作らないので上がらない
-    assert.equal(await storage.getConfigRev(), rev0 + 1);
+    assert.equal(await storage.getConfigRev(), rev1);
+  });
+
+  it("版は今の時刻(UNIX 秒)より小さくならない(DB を作り直しても、端末が覚えている前の版を超える)", async () => {
+    const { storage, channels } = await setup();
+    await channels.createGroup("北班", ["dev-001"]);
+    assert.ok((await storage.getConfigRev()) >= Math.floor(T0 / 1000));
   });
 
   it("全端末への配り直しは、登録した端末だけ", async () => {
@@ -124,6 +131,35 @@ describe("チャンネル【案】", () => {
     await rejects(channels.createGroup("多すぎ", ["dev-001"]), 422, "too_many_channels");
     // 今入っているグループの名前を変えるのは、数が増えないので通る
     await channels.updateGroup(groups[0]!.ch, "班1改", ["dev-001"]);
+  });
+
+  it("設定にポジションの番号と名前が入る。変えたら版を上げて全端末に配り直す(2026-11-24)", async () => {
+    const { storage, channels, config } = await setup();
+    await channels.publishAll();
+    const before = lastConfig(config, "dev-003");
+    const seeds = await storage.listPositions();
+    assert.deepEqual(before?.positions, seeds.map((p) => ({ pos: p.no, name: p.name })));
+    assert.equal(before?.positions_more, undefined);
+
+    await storage.createPosition({ no: 200, name: "臨時の集合場所", place: null, lat: null, lon: null }, new Date(T0));
+    await channels.positionsChanged();
+    const after = lastConfig(config, "dev-003");
+    assert.ok((after?.rev as number) > (before?.rev as number));
+    assert.deepEqual((after?.positions as { pos: number }[]).at(-1), { pos: 200, name: "臨時の集合場所" });
+  });
+
+  it("ポジションが多すぎて 1,500 バイトを超えるときは、番号の大きい方を削って positions_more を付ける", async () => {
+    const { storage, channels, config } = await setup();
+    for (let no = 100; no < 160; no++) {
+      await storage.createPosition({ no, name: `とても長い名前のポジション${no}`, place: null, lat: null, lon: null }, new Date(T0));
+    }
+    await channels.publishAll();
+    const c = config.find((x) => x.topic === "reray/v1/down/dev-001/config");
+    assert.ok(c);
+    assert.ok(Buffer.byteLength(JSON.stringify(c.body)) <= 1500);
+    assert.equal(c.body.positions_more, true);
+    const nos = (c.body.positions as { pos: number }[]).map((p) => p.pos);
+    assert.deepEqual(nos, [...nos].sort((a, b) => a - b)); // 小さい番号から残る
   });
 
   it("配れなくても止めない(原本に failed で残る)", async () => {

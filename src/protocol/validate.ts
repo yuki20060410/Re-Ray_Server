@@ -3,7 +3,7 @@
 // 不正なものは理由(events.note に入れる短い英語)を付けて返す。サーバーは捨てるだけで、止まらない。
 // 未知の項目は無視する(原本には残る)。
 
-import type { Via } from "../storage/types.js";
+import type { DeviceMode, Via } from "../storage/types.js";
 import { deviceNumber, parseUpTopic, type UpType } from "./topics.js";
 
 /** これを超える本文は捨てる(DATAFLOW §8.1) */
@@ -32,6 +32,8 @@ export interface StatusMessage {
   via?: Via;
   lat?: number;
   lon?: number;
+  /** 【案】平常時 / 緊急時(2026-11-24) */
+  mode?: DeviceMode;
 }
 
 /** 遺言(ブローカーが代わりに流す。seq と ts が無い) */
@@ -146,6 +148,11 @@ function parseBody(
         if (!isNum(body.lat, -90, 90) || !isNum(body.lon, -180, 180)) return bad("lat/lon");
         message.lat = body.lat;
         message.lon = body.lon;
+      }
+      // 【案】平常時 / 緊急時(端末からの依頼 11/17 #5。2026-11-24)
+      if (body.mode !== undefined) {
+        if (body.mode !== "normal" && body.mode !== "emergency") return bad("mode");
+        message.mode = body.mode;
       }
       return { ok: true, message };
     }
