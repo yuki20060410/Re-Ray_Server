@@ -115,7 +115,9 @@ const MockServer = (() => {
       declined: ds.filter(d => d.response === 'declined').length,
       waiting: ds.filter(d => !d.received_at && !d.skipped && d.via_at_send !== 'offline').length,
       lora: ds.filter(d => d.via_at_send === 'lora' && !d.skipped).length,
-      offline: ds.filter(d => d.via_at_send === 'offline').length,
+      // offline = 送った時に切れていて、まだ届いていない。late = 送った時は切れていたが、つながってから届いた
+      offline: ds.filter(d => d.via_at_send === 'offline' && !d.received_at).length,
+      late: ds.filter(d => d.via_at_send === 'offline' && d.received_at).length,
       skipped: ds.filter(d => d.skipped).length,
     };
   }
