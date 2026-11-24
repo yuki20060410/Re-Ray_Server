@@ -662,8 +662,24 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
           result: "pending",
         });
         await s.setEventResult(id, "invalid", "json");
-        // 原本を読む窓口はまだ無い(CSV 出力を作るときに足す)。ここでは落ちないことだけ確かめる
-        assert.ok(id > 0);
+        const [e] = await s.listEvents({ limit: 1 });
+        assert.deepEqual([e?.id, e?.result, e?.note, e?.payload], [id, "invalid", "json", "{"]);
+      });
+
+      it("結果・端末・向きでしぼって、新しい順に引ける(2026-11-24)", async () => {
+        const s = await make();
+        const ev = (sec: number, topic: string, result: "accepted" | "invalid" | "sent", direction: "up" | "down" = "up") =>
+          s.saveEvent({ at: at(sec), direction, topic, payload: "{}", result });
+        const a = await ev(0, "reray/v1/up/dev-001/signal", "invalid");
+        const b = await ev(1, "reray/v1/up/dev-002/signal", "invalid");
+        const c = await ev(2, "reray/v1/up/dev-001/status", "accepted");
+        const d = await ev(3, "reray/v1/down/dev-001/ack", "sent", "down");
+        const ids = async (f: Parameters<Storage["listEvents"]>[0]) => (await s.listEvents(f)).map((e) => e.id);
+        assert.deepEqual(await ids({ results: ["invalid"], limit: 10 }), [b, a]);
+        assert.deepEqual(await ids({ results: ["invalid"], deviceId: "dev-001", limit: 10 }), [a]);
+        assert.deepEqual(await ids({ direction: "down", limit: 10 }), [d]);
+        assert.deepEqual(await ids({ deviceId: "dev-001", limit: 2 }), [d, c]);
+        assert.deepEqual(await s.listEvents({ results: [], limit: 10 }), []);
       });
     });
   });

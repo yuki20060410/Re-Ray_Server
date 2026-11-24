@@ -14,7 +14,7 @@ import { ChannelError, type ChannelService } from "../server/channels.js";
 import { VoiceError, type VoiceService } from "../voice/service.js";
 import { VOICE_MAX_BYTES } from "../voice/wav.js";
 import { BODY_MAX, SendError, type Sender } from "../server/sender.js";
-import type { InstructionCode, PositionInput, Storage, Via } from "../storage/types.js";
+import type { EventResult, InstructionCode, PositionInput, Storage, Via } from "../storage/types.js";
 import {
   channelView,
   deviceView,
@@ -398,6 +398,33 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     }
     // 時刻の文字列は同じ時間帯・同じ桁なので、文字の順 = 時刻の順
     return items.sort((a, b) => (b.at ?? "").localeCompare(a.at ?? "")).slice(0, limit);
+  });
+
+  // ---- 原本【案】(端末からの依頼 11/20 #5: 端末から届いて捨てたものの理由を見られるように。2026-11-24) ----
+  // result: カンマ区切り(例 invalid,unmatched)。device: その端末のトピックだけ。direction: up / down。新しい順
+
+  app.get<{ Querystring: Record<string, string | undefined> }>("/api/events", async (req) => {
+    const q = req.query;
+    const results = q.result ? q.result.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+    const known = ["pending", "accepted", "duplicate", "invalid", "unmatched", "ignored", "sent", "failed"];
+    if (results?.some((r) => !known.includes(r))) bad(`result は ${known.join("・")} のどれかです`);
+    if (q.direction && q.direction !== "up" && q.direction !== "down") bad("direction は up か down です");
+    const list = await storage.listEvents({
+      limit: limitParam(q.limit, 100, LOG_LIMIT_MAX),
+      ...(results && { results: results as EventResult[] }),
+      ...(q.device && { deviceId: deviceIdParam(q.device) }),
+      ...(q.direction && { direction: q.direction as "up" | "down" }),
+    });
+    return list.map((e) => ({
+      id: e.id,
+      at: iso(e.at),
+      direction: e.direction,
+      topic: e.topic,
+      result: e.result,
+      note: e.note ?? null,
+      // 本文は長いことがあるので 1,000 文字で切る(バイナリは 16 進)
+      payload: e.payload.length > 1000 ? `${e.payload.slice(0, 1000)}…` : e.payload,
+    }));
   });
 
   // ---- SOS(どの画面でも知らせる)【案】 ----

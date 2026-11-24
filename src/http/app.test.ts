@@ -357,3 +357,19 @@ describe("モードの API【案】", () => {
     assert.equal(get(list[0], "mode"), "emergency");
   });
 });
+
+describe("原本の API【案】", () => {
+  it("捨てたもの(invalid)を理由つきで、端末ごとに引ける", async () => {
+    const { call, receiver } = await setup();
+    await receiver.handle("reray/v1/up/dev-001/signal", Buffer.from("{"));
+    await receiver.handle("reray/v1/up/dev-002/signal", Buffer.from(JSON.stringify({ v: 2 })));
+    const r = await call("GET", "/api/events?result=invalid&device=dev-001");
+    assert.equal(r.status, 200);
+    const list = r.body as unknown[];
+    assert.deepEqual(
+      list.map((e) => [get(e, "topic"), get(e, "result"), get(e, "note"), get(e, "payload")]),
+      [["reray/v1/up/dev-001/signal", "invalid", "json", "{"]],
+    );
+    assert.equal((await call("GET", "/api/events?result=nope")).status, 400);
+  });
+});

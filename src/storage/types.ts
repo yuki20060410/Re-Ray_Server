@@ -51,6 +51,20 @@ export interface NewEvent {
 
 export type EventId = number;
 
+export interface EventRecord extends NewEvent {
+  id: EventId;
+}
+
+/** 【案】原本の検索(端末からの依頼 11/20 #5: 捨てた理由を見られるように。2026-11-24) */
+export interface EventFilter {
+  /** この結果のものだけ(例: invalid・unmatched) */
+  results?: EventResult[];
+  /** この端末のトピック(`/{id}/` を含むもの)だけ */
+  deviceId?: DeviceId;
+  direction?: EventDirection;
+  limit: number;
+}
+
 // ---- 端末(devices) ----
 
 export interface Device {
@@ -304,6 +318,8 @@ export interface Storage {
   saveEvent(event: NewEvent): Promise<EventId>;
   /** 解釈が終わったら結果を書く */
   setEventResult(id: EventId, result: EventResult, note?: string): Promise<void>;
+  /** 【案】原本を新しい順に引く(2026-11-24) */
+  listEvents(filter: EventFilter): Promise<EventRecord[]>;
 
   // 定型信号
   /**

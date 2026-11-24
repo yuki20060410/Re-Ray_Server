@@ -13,7 +13,9 @@ import type {
   Delivery,
   Device,
   DeviceId,
+  EventFilter,
   EventId,
+  EventRecord,
   EventResult,
   InstructionCode,
   Message,
@@ -92,6 +94,19 @@ export class MemoryStorage implements Storage {
     if (!event) return;
     event.result = result;
     if (note !== undefined) event.note = note;
+  }
+
+  async listEvents(f: EventFilter): Promise<EventRecord[]> {
+    return this.events
+      .filter(
+        (e) =>
+          (!f.results || f.results.includes(e.result)) &&
+          (f.deviceId === undefined || e.topic.includes(`/${f.deviceId}/`)) &&
+          (f.direction === undefined || e.direction === f.direction),
+      )
+      .sort((a, b) => b.at.getTime() - a.at.getTime() || b.id - a.id)
+      .slice(0, f.limit)
+      .map((e) => ({ ...e }));
   }
 
   // ---- 定型信号 ----

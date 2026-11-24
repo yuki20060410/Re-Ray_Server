@@ -559,6 +559,7 @@ JSON、UTF-8。パスの接頭辞は `/api`。検証版は認証なし(ローカ
 | GET | `/api/devices/{id}/config` | その端末に配る設定(確かめる用。§2.8) |
 | POST | `/api/messages` | `{ch, body}` でチャンネルあて(本部が言った文)。`dst` の形は今までどおり |
 | POST | `/api/voice` | 端末の音声(§2.9) |
+| GET | `/api/events?result=invalid&device=dev-001&direction=up&limit=100` | 受信・送信の原本(新しい順)。**端末から届いて捨てたものの理由**(`note`: `json`、`src mismatch`、`v!=1` など)を見られる(端末からの依頼 11/20 #5)。`result` はカンマ区切りで複数 |
 | POST | `/api/mode` | 全端末のモードを切り替える。`{mode: "normal" \| "emergency"}` → 201。端末一覧(`/api/devices`)に各端末の `mode` が出る |
 | GET | `/api/voice?limit=&device=` | 音声の一覧(新しい順)。`status`(queued・done・empty・failed)、`text`、`error`、`audio_url` など |
 | GET | `/api/voice/{id}/audio` | 音そのもの(audio/wav。管理画面で聞く) |

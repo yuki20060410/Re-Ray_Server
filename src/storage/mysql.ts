@@ -22,7 +22,9 @@ import type {
   Device,
   DeviceId,
   DeviceMode,
+  EventFilter,
   EventId,
+  EventRecord,
   EventResult,
   InstructionCode,
   Message,
@@ -113,6 +115,48 @@ export class MysqlStorage implements Storage {
       note ?? null,
       id,
     ]);
+  }
+
+  async listEvents(f: EventFilter): Promise<EventRecord[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (f.results !== undefined) {
+      if (!f.results.length) return [];
+      where.push("result IN (?)");
+      params.push(f.results);
+    }
+    if (f.deviceId !== undefined) {
+      // 端末ID は dev-001 の形に確かめてあるので、LIKE の特別な文字(% _)は入らない
+      where.push("topic LIKE ?");
+      params.push(`%/${f.deviceId}/%`);
+    }
+    if (f.direction !== undefined) {
+      where.push("direction = ?");
+      params.push(f.direction);
+    }
+    params.push(f.limit);
+    const list = await rows<{
+      id: number;
+      at: Date;
+      direction: EventRecord["direction"];
+      topic: string;
+      payload: string;
+      result: EventResult;
+      note: string | null;
+    }>(
+      this.pool,
+      `SELECT * FROM events ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY at DESC, id DESC LIMIT ?`,
+      params,
+    );
+    return list.map((r) => ({
+      id: Number(r.id),
+      at: r.at,
+      direction: r.direction,
+      topic: r.topic,
+      payload: r.payload,
+      result: r.result,
+      ...(r.note !== null && { note: r.note }),
+    }));
   }
 
   // ---- 定型信号 ----
