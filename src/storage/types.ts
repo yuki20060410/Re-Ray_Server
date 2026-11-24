@@ -14,7 +14,7 @@
 // 2026-11-06: reray-app(B 案の表で作られた試作)から取り込むため、次を足した
 //   一覧表(ポジション・定型信号・指示コード)、SOS の対応済み、了解/できない、LoRa 中で送らなかった印、
 //   記録の検索、「切れた」の理由
-// 2026-11-24: チャンネル(端末からの依頼 #1〜3)と、文の ch・from を足した
+// 2026-11-24: チャンネル(端末からの依頼 #1〜3)と、文の ch・from、音声(#4)を足した
 
 export type DeviceId = string;
 export type Via = "wifi" | "lora";
@@ -186,6 +186,43 @@ export interface Channel {
   createdAt: Date;
 }
 
+// ---- 音声【案】(端末からの依頼 2026-11-17 の #4) ----
+
+/** queued = 文字起こし待ち、done = 文字にして配った、empty = 声が無かった(配らない)、failed = あきらめた */
+export type VoiceStatus = "queued" | "done" | "empty" | "failed";
+
+export interface NewVoiceClip {
+  deviceId: DeviceId;
+  /** 宛先のチャンネル */
+  ch: number;
+  /** 端末の番号(同じ番号がもう一度来たら送り直し) */
+  seq: number;
+  durationMs: number;
+  bytes: number;
+  receivedAt: Date;
+}
+
+export interface VoiceClip extends NewVoiceClip {
+  id: number;
+  status: VoiceStatus;
+  /** 文字にした文(配る前、切り詰める前のもの) */
+  text: string | null;
+  error: string | null;
+  /** 配った messages.id */
+  messageId: number | null;
+  /** 文字起こしを試した回数 */
+  attempts: number;
+  doneAt: Date | null;
+}
+
+export type VoiceUpdate = Partial<Pick<VoiceClip, "status" | "text" | "error" | "messageId" | "attempts" | "doneAt">>;
+
+export interface VoiceFilter {
+  deviceId?: DeviceId;
+  statuses?: VoiceStatus[];
+  limit: number;
+}
+
 // ---- 本部から送ったもの(messages)と宛先(message_targets) ----
 
 export type MessageKind = "free" | "order";
@@ -331,6 +368,17 @@ export interface Storage {
   getConfigRev(): Promise<number>;
   /** 版を 1 つ増やし、新しい版を返す */
   bumpConfigRev(): Promise<number>;
+
+  // 音声【案】
+  /**
+   * 重複でなければ記録する(status = queued)。重複 = 同じ端末・同じ seq が受信時刻の前後 windowMs 以内にある。
+   * 重複なら、前に記録したものを返す(端末の送り直しに同じ id を返すため)。判定と記録は一続きにする
+   */
+  recordVoice(clip: NewVoiceClip, windowMs: number): Promise<{ kind: "saved" | "duplicate"; clip: VoiceClip }>;
+  updateVoice(id: number, update: VoiceUpdate): Promise<void>;
+  getVoice(id: number): Promise<VoiceClip | null>;
+  /** 新しい順 */
+  listVoices(filter: VoiceFilter): Promise<VoiceClip[]>;
 
   // 本部から送ったもの
   /** 送る前に呼ぶ。messages と宛先を一続きに書き、id(= mid)を返す。宛先の端末が無ければ作る */

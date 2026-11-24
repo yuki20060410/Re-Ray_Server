@@ -6,7 +6,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { NewMessage, NewSignal, Storage } from "./types.js";
+import type { NewMessage, NewSignal, NewVoiceClip, Storage } from "./types.js";
 
 const TEN_MIN = 10 * 60 * 1000;
 const T0 = Date.parse("2026-11-06T00:00:00.000Z");
@@ -547,6 +547,60 @@ export function runStorageContract(name: string, make: () => Promise<Storage>): 
         // チャンネルなしの文には付かない
         const plain = await s.getMessage((await s.createMessage(message({ seq: 9 }), [])).id);
         assert.deepEqual([plain?.ch, plain?.from], [undefined, undefined]);
+      });
+    });
+
+    describe("音声【案】", () => {
+      const clip = (over: Partial<NewVoiceClip> = {}): NewVoiceClip => ({
+        deviceId: "dev-001", ch: 5, seq: 123, durationMs: 3200, bytes: 102444, receivedAt: at(0), ...over,
+      });
+
+      it("記録すると queued。端末の行も無ければ作る", async () => {
+        const s = await make();
+        const r = await s.recordVoice(clip(), TEN_MIN);
+        assert.equal(r.kind, "saved");
+        assert.deepEqual(
+          [r.clip.deviceId, r.clip.ch, r.clip.seq, r.clip.durationMs, r.clip.bytes, r.clip.status, r.clip.attempts],
+          ["dev-001", 5, 123, 3200, 102444, "queued", 0],
+        );
+        assert.deepEqual([r.clip.text, r.clip.error, r.clip.messageId, r.clip.doneAt], [null, null, null, null]);
+        assert.deepEqual(r.clip.receivedAt, at(0));
+        assert.equal((await s.getDevice("dev-001"))?.registered, false);
+      });
+
+      it("送り直し(同じ端末・同じ seq・10 分以内)は前の記録を返す。10 分を過ぎたら別の記録", async () => {
+        const s = await make();
+        const a = await s.recordVoice(clip(), TEN_MIN);
+        const again = await s.recordVoice(clip({ receivedAt: at(20) }), TEN_MIN);
+        assert.deepEqual([again.kind, again.clip.id], ["duplicate", a.clip.id]);
+        assert.equal((await s.recordVoice(clip({ deviceId: "dev-002" }), TEN_MIN)).kind, "saved");
+        assert.equal((await s.recordVoice(clip({ receivedAt: at(601) }), TEN_MIN)).kind, "saved");
+      });
+
+      it("同時に届いても 1 件だけ", async () => {
+        const s = await make();
+        const rs = await Promise.all([1, 2, 3].map(() => s.recordVoice(clip(), TEN_MIN)));
+        assert.equal(rs.filter((r) => r.kind === "saved").length, 1);
+        assert.equal(new Set(rs.map((r) => r.clip.id)).size, 1);
+      });
+
+      it("結果を書き、状態でしぼって新しい順に引ける", async () => {
+        const s = await make();
+        const a = (await s.recordVoice(clip({ seq: 1, receivedAt: at(0) }), TEN_MIN)).clip;
+        const b = (await s.recordVoice(clip({ seq: 2, receivedAt: at(10) }), TEN_MIN)).clip;
+        const m = await s.createMessage(message({ ch: 5, from: "dev-001", source: "transcript" }), []);
+        await s.updateVoice(a.id, { status: "done", text: "点検が終わりました", messageId: m.id, attempts: 1, doneAt: at(5) });
+        await s.updateVoice(b.id, { attempts: 1, error: "timeout" });
+
+        const got = await s.getVoice(a.id);
+        assert.deepEqual(
+          [got?.status, got?.text, got?.messageId, got?.attempts, got?.doneAt],
+          ["done", "点検が終わりました", m.id, 1, at(5)],
+        );
+        assert.deepEqual((await s.listVoices({ limit: 10 })).map((v) => v.id), [b.id, a.id]);
+        assert.deepEqual((await s.listVoices({ statuses: ["queued"], limit: 10 })).map((v) => [v.id, v.error]), [[b.id, "timeout"]]);
+        assert.deepEqual(await s.listVoices({ statuses: [], limit: 10 }), []);
+        assert.equal(await s.getVoice(999999), null);
       });
     });
 

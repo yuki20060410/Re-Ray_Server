@@ -5,7 +5,7 @@
 // 3. HTTP API と管理画面(web/)を配る(http://localhost:3000)
 // 4. DEV_TOOLS=1 なら、偽の端末をつなぎ、管理画面の「テスト用」の欄を使えるようにする
 // 2026-11-06: M2・M3(HTTP API、送信、切れた判定)と MySQL 版を足した(reray-app から取り込み)
-// 2026-11-24: チャンネル(ChannelService)を足した
+// 2026-11-24: チャンネル(ChannelService)と音声(VoiceService)を足した
 
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,8 @@ import { Sender } from "./server/sender.js";
 import { MemoryStorage } from "./storage/memory.js";
 import { MysqlStorage } from "./storage/mysql.js";
 import type { Storage } from "./storage/types.js";
+import { VoiceService } from "./voice/service.js";
+import { OpenAiCompatibleTranscriber, PlaceholderTranscriber } from "./voice/transcriber.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 
@@ -51,6 +53,18 @@ client.on("connect", () => {
 });
 
 const sender = new Sender({ storage, pcSeq, publish: strictPublisher(client), channels });
+
+// 【案】音声(2026-11-24)。STT_URL が無ければ仮の文字起こし
+const transcriber = config.stt.url
+  ? new OpenAiCompatibleTranscriber({
+      baseUrl: config.stt.url,
+      model: config.stt.model,
+      language: config.stt.language,
+      ...(config.stt.apiKey && { apiKey: config.stt.apiKey }),
+    })
+  : new PlaceholderTranscriber();
+const voice = new VoiceService({ storage, sender, transcriber, dir: config.voiceDir });
+await voice.start();
 const presence = new Presence({ storage });
 presence.start();
 
@@ -65,12 +79,13 @@ const app = await buildApp({
   webDir,
   dev: fleet,
   channels,
+  voice,
 });
 await app.listen({ port: config.httpPort, host: "0.0.0.0" });
 
 console.log(
   `Re-Ray_Server: 起動しました(保存: ${config.storage === "mysql" ? "MySQL" : "メモリ版"}、` +
-    `画面と API: http://localhost:${config.httpPort})`,
+    `画面と API: http://localhost:${config.httpPort}、文字起こし: ${voice.transcriberLabel})`,
 );
 
 if (fleet) {
@@ -88,6 +103,7 @@ async function shutdown(): Promise<void> {
   presence.stop();
   await fleet?.stopAll();
   await app.close();
+  await voice.stop();
   await receiver.drain();
   await client.endAsync();
   await storage.close();

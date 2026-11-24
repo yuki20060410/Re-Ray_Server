@@ -32,6 +32,10 @@ import type {
   SignalFilter,
   StatusUpdate,
   Storage,
+  NewVoiceClip,
+  VoiceClip,
+  VoiceFilter,
+  VoiceUpdate,
 } from "./types.js";
 
 interface StoredEvent extends NewEvent {
@@ -63,6 +67,7 @@ export class MemoryStorage implements Storage {
   private readonly channels = new Map<number, Channel>();
   private nextCh = 1;
   private configRev = 0;
+  private readonly voices: VoiceClip[] = [];
 
   constructor(options: MemoryStorageOptions = {}) {
     if (options.seed ?? true) {
@@ -301,6 +306,47 @@ export class MemoryStorage implements Storage {
 
   async bumpConfigRev(): Promise<number> {
     return ++this.configRev;
+  }
+
+  // ---- 音声 ----
+
+  async recordVoice(clip: NewVoiceClip, windowMs: number): Promise<{ kind: "saved" | "duplicate"; clip: VoiceClip }> {
+    const t = clip.receivedAt.getTime();
+    const dup = this.voices.find(
+      (v) => v.deviceId === clip.deviceId && v.seq === clip.seq && Math.abs(v.receivedAt.getTime() - t) <= windowMs,
+    );
+    if (dup) return { kind: "duplicate", clip: { ...dup } };
+    this.ensureDevice(clip.deviceId, clip.receivedAt);
+    const saved: VoiceClip = {
+      ...clip,
+      id: this.voices.length + 1,
+      status: "queued",
+      text: null,
+      error: null,
+      messageId: null,
+      attempts: 0,
+      doneAt: null,
+    };
+    this.voices.push(saved);
+    return { kind: "saved", clip: { ...saved } };
+  }
+
+  async updateVoice(id: number, update: VoiceUpdate): Promise<void> {
+    const v = this.voices[id - 1];
+    if (v) Object.assign(v, update);
+  }
+
+  async getVoice(id: number): Promise<VoiceClip | null> {
+    const v = this.voices[id - 1];
+    return v ? { ...v } : null;
+  }
+
+  async listVoices(f: VoiceFilter): Promise<VoiceClip[]> {
+    return this.voices
+      .filter((v) => (f.deviceId === undefined || v.deviceId === f.deviceId) && (!f.statuses || f.statuses.includes(v.status)))
+      .sort((a, b) => b.receivedAt.getTime() - a.receivedAt.getTime() || b.id - a.id)
+      .slice(0, f.limit)
+      .map((v) => ({ ...v }));
   }
 
   // ---- 本部から送ったもの ----

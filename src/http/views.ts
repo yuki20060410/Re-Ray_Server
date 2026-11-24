@@ -13,6 +13,7 @@ import type {
   Position,
   Signal,
   SignalCode,
+  VoiceClip,
 } from "../storage/types.js";
 
 /** 画面に出す時間帯(INTERFACES §4.1: 時刻は ISO 8601。表示は日本時間) */
@@ -31,6 +32,28 @@ export interface Refs {
   owners: Map<string, string | null>;
   /** 【案】チャンネル(2026-11-24) */
   channels: Map<number, Channel>;
+}
+
+/** 【案】音声(2026-11-24)。audio_url で音そのものを聞ける */
+export function voiceView(refs: Refs, v: VoiceClip) {
+  return {
+    id: v.id,
+    device: v.deviceId,
+    owner: refs.owners.get(v.deviceId) ?? null,
+    ch: v.ch,
+    ch_name: refs.channels.get(v.ch)?.name ?? null,
+    seq: v.seq,
+    duration_ms: v.durationMs,
+    bytes: v.bytes,
+    status: v.status,
+    text: v.text,
+    error: v.error,
+    message_id: v.messageId,
+    attempts: v.attempts,
+    received_at: iso(v.receivedAt),
+    done_at: iso(v.doneAt),
+    audio_url: `/api/voice/${v.id}/audio`,
+  };
 }
 
 /** 【案】チャンネル(2026-11-24) */

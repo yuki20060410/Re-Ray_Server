@@ -23,6 +23,13 @@ export const HQ_NAME = "本部";
  */
 export const BODY_MAX = 40;
 
+/**
+ * 【案】文字起こしの文の上限(2026-11-24)。声を文字にした文は 40 文字に収まらない(端末からの依頼 §4.3)。
+ * グラスは長い文をページに分けて出す。端末の受信の入れ物(2048 バイト)に、ほかの項目と一緒に収まる長さ。
+ * DB は messages.body を VARCHAR(255) にする(db/init/03_server.sql)
+ */
+export const TRANSCRIPT_MAX = 200;
+
 /** 送れなかった理由。status は API がそのまま返す(INTERFACES §4.4) */
 export class SendError extends Error {
   constructor(
@@ -79,7 +86,10 @@ export class Sender {
   /** 送る。保存した 1 通(publishState は sent)を返す。だめなら SendError */
   async send(req: SendRequest): Promise<Message> {
     const dst = await this.checkDst(req.dst);
-    const content = req.kind === "free" ? { body: checkBody(req.body), pos: 0 } : await this.orderContent(req.icode, req.pos);
+    const content =
+      req.kind === "free"
+        ? { body: checkBody(req.body, req.source === "transcript" ? TRANSCRIPT_MAX : BODY_MAX), pos: 0 }
+        : await this.orderContent(req.icode, req.pos);
     const devices = dst === "all" ? await this.storage.listDevices() : [await this.storage.getDevice(dst)];
     const ch = dst !== "all" && this.channels ? (await this.channels.ensureDirect(dst)).ch : undefined;
 
@@ -105,7 +115,7 @@ export class Sender {
     const channel = Number.isInteger(req.ch) ? await this.storage.getChannel(req.ch) : null;
     if (!channel) throw new SendError(422, "unknown_channel", "そのチャンネルはありません");
     if (!channel.members.length) throw new SendError(422, "empty_channel", "そのチャンネルには端末が入っていません");
-    const body = checkBody(req.body);
+    const body = checkBody(req.body, req.source === "transcript" ? TRANSCRIPT_MAX : BODY_MAX);
     const devices = (await Promise.all(channel.members.map((id) => this.storage.getDevice(id)))).filter(
       (d): d is Device => d !== null,
     );
@@ -203,9 +213,9 @@ export class Sender {
   }
 }
 
-function checkBody(body: unknown): string {
+function checkBody(body: unknown, max = BODY_MAX): string {
   const text = typeof body === "string" ? body.trim() : "";
   if (!text) throw new SendError(422, "empty_body", "本文を入れてください");
-  if ([...text].length > BODY_MAX) throw new SendError(422, "body_too_long", `本文は${BODY_MAX}文字までです`);
+  if ([...text].length > max) throw new SendError(422, "body_too_long", `本文は${max}文字までです`);
   return text;
 }

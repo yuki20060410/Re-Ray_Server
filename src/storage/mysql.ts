@@ -43,6 +43,10 @@ import type {
   Storage,
   Via,
   ViaAtSend,
+  NewVoiceClip,
+  VoiceClip,
+  VoiceFilter,
+  VoiceUpdate,
 } from "./types.js";
 
 /** DB の時刻の時間帯(B 案は日本時間。DB-012 で UTC に決まったら '+00:00' にする) */
@@ -455,6 +459,77 @@ export class MysqlStorage implements Storage {
     });
   }
 
+  // ---- 音声【案】(03_server.sql の voice_clips) ----
+
+  async recordVoice(clip: NewVoiceClip, windowMs: number): Promise<{ kind: "saved" | "duplicate"; clip: VoiceClip }> {
+    const no = toNo(clip.deviceId);
+    const t = clip.receivedAt.getTime();
+    const r = await this.tx(async (c) => {
+      // 端末の行に鍵をかけてから重複を調べる(送り直しが同時に届いても 1 件にする。recordSignal と同じ)
+      await lockDevice(c, no, clip.receivedAt);
+      const [dup] = await rows<{ id: number }>(
+        c,
+        "SELECT id FROM voice_clips WHERE device_id = ? AND seq = ? AND received_at BETWEEN ? AND ? ORDER BY id LIMIT 1",
+        [no, clip.seq, new Date(t - windowMs), new Date(t + windowMs)],
+      );
+      if (dup) return { kind: "duplicate" as const, id: Number(dup.id) };
+      const ins = await exec(
+        c,
+        `INSERT INTO voice_clips (device_id, channel_id, seq, duration_ms, bytes, status, received_at)
+         VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
+        [no, clip.ch, clip.seq, clip.durationMs, clip.bytes, clip.receivedAt],
+      );
+      return { kind: "saved" as const, id: ins.insertId };
+    });
+    const saved = await this.getVoice(r.id);
+    if (!saved) throw new Error("記録した音声が読めない");
+    return { kind: r.kind, clip: saved };
+  }
+
+  async updateVoice(id: number, u: VoiceUpdate): Promise<void> {
+    const cols: string[] = [];
+    const params: unknown[] = [];
+    const set = (col: string, v: unknown) => {
+      cols.push(`${col} = ?`);
+      params.push(v);
+    };
+    if (u.status !== undefined) set("status", u.status);
+    if (u.text !== undefined) set("text", u.text);
+    if (u.error !== undefined) set("error", u.error?.slice(0, 255) ?? null);
+    if (u.messageId !== undefined) set("message_id", u.messageId);
+    if (u.attempts !== undefined) set("attempts", u.attempts);
+    if (u.doneAt !== undefined) set("done_at", u.doneAt);
+    if (!cols.length) return;
+    await exec(this.pool, `UPDATE voice_clips SET ${cols.join(", ")} WHERE id = ?`, [...params, id]);
+  }
+
+  async getVoice(id: number): Promise<VoiceClip | null> {
+    const [r] = await rows<VoiceRow>(this.pool, "SELECT * FROM voice_clips WHERE id = ?", [id]);
+    return r ? toVoice(r) : null;
+  }
+
+  async listVoices(f: VoiceFilter): Promise<VoiceClip[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (f.deviceId !== undefined) {
+      where.push("device_id = ?");
+      params.push(toNo(f.deviceId));
+    }
+    if (f.statuses !== undefined) {
+      if (!f.statuses.length) return [];
+      where.push("status IN (?)");
+      params.push(f.statuses);
+    }
+    params.push(f.limit);
+    const list = await rows<VoiceRow>(
+      this.pool,
+      `SELECT * FROM voice_clips ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+        ORDER BY received_at DESC, id DESC LIMIT ?`,
+      params,
+    );
+    return list.map(toVoice);
+  }
+
   // ---- 本部から送ったもの ----
 
   async createMessage(m: NewMessage, targets: MessageTarget[]): Promise<Message> {
@@ -864,6 +939,40 @@ function toMessage(r: MessageRow): Message {
     publishState: r.publish_state,
     ...(r.channel_id !== null && { ch: r.channel_id }),
     ...(r.from_device_id !== null && { from: formatDeviceId(r.from_device_id) }),
+  };
+}
+
+interface VoiceRow {
+  id: number;
+  device_id: number;
+  channel_id: number;
+  seq: number;
+  duration_ms: number;
+  bytes: number;
+  status: VoiceClip["status"];
+  text: string | null;
+  error: string | null;
+  message_id: number | null;
+  attempts: number;
+  received_at: Date;
+  done_at: Date | null;
+}
+
+function toVoice(r: VoiceRow): VoiceClip {
+  return {
+    id: Number(r.id),
+    deviceId: formatDeviceId(r.device_id),
+    ch: r.channel_id,
+    seq: r.seq,
+    durationMs: r.duration_ms,
+    bytes: r.bytes,
+    receivedAt: r.received_at,
+    status: r.status,
+    text: r.text,
+    error: r.error,
+    messageId: r.message_id === null ? null : Number(r.message_id),
+    attempts: r.attempts,
+    doneAt: r.done_at,
   };
 }
 

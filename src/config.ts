@@ -1,5 +1,6 @@
 // 設定(.env から読む。値の意味は .env.example)
 // 2026-11-06: 保存先(STORAGE)、MySQL、HTTP のポート、テスト用の操作(DEV_TOOLS)を足した
+// 2026-11-24: 文字起こし(STT_*)と音声の置き場所(VOICE_DIR)を足した
 
 export interface Config {
   mqttUrl: string;
@@ -14,6 +15,14 @@ export interface Config {
   devTools: boolean;
   /** DEV_TOOLS のとき、起動時につなぐ偽の端末 */
   devFakes: string[];
+  /**
+   * 【案】文字起こし(2026-11-24)。url が無ければ仮の文字起こし(「(音声 3 秒)」)。
+   * 自宅サーバーの faster-whisper(compose.yaml の stt)なら http://localhost:8000、
+   * 外のサービスなら https://api.openai.com と apiKey
+   */
+  stt: { url: string | undefined; model: string; apiKey: string | undefined; language: string };
+  /** 【案】端末から届いた音声のファイルを置くフォルダー */
+  voiceDir: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -39,5 +48,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    stt: {
+      url: env.STT_URL || undefined,
+      model: env.STT_MODEL || "Systran/faster-whisper-small",
+      apiKey: env.STT_API_KEY || undefined,
+      language: env.STT_LANGUAGE || "ja",
+    },
+    voiceDir: env.VOICE_DIR || "data/voice",
   };
 }
